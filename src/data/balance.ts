@@ -6,7 +6,9 @@ export const BALANCE = {
   player: {
     baseStats: {
       maxHealth: 100,
-      meleeDamage: 12,
+      // Slight edge over the level-1 enemy (section 11: "Captain Windel
+      // soll am Anfang einen Vorteil haben. Nicht extrem.").
+      meleeDamage: 14,
       defense: 0,
       moveSpeed: 210,
       attackSpeed: 1,
@@ -17,17 +19,32 @@ export const BALANCE = {
   },
   enemyScaling: {
     // Per level (index starting at 1), how much stronger a same-type enemy
-    // becomes. Kept gentle and continuous — no sudden spikes.
-    healthGrowthPerLevel: 0.065,
-    damageGrowthPerLevel: 0.05,
-    speedGrowthPerLevel: 0.012,
+    // becomes before the difficulty curve multiplier (below) tapers it for
+    // early levels and ramps it back up later.
+    healthGrowthPerLevel: 0.05,
+    damageGrowthPerLevel: 0.04,
+    speedGrowthPerLevel: 0.008,
     defenseGrowthPerLevel: 0.004,
-    sizeGrowthPerLevel: 0.025, // ~2.5% per level as requested
+    sizeGrowthPerLevel: 0.02, // ~2% per level (section 10)
     maxSizeMult: 1.9,
   },
+  // Section 6/10: "Lernkurve statt sofortiger Schwierigkeit". Levels 1-3 get
+  // only a fraction of the normal growth rate, 4-5 a bit more, 6-10 close to
+  // normal, and beyond level 10 the curve is allowed to accelerate past 1x.
+  difficultyCurve: [
+    { uptoLevel: 3, multiplier: 0.3 },
+    { uptoLevel: 5, multiplier: 0.5 },
+    { uptoLevel: 10, multiplier: 0.75 },
+    { uptoLevel: 20, multiplier: 1.0 },
+    { uptoLevel: 35, multiplier: 1.2 },
+    { uptoLevel: Infinity, multiplier: 1.4 },
+  ],
   boss: {
-    healthMult: 6,
-    damageMult: 1.6,
+    // Deutlich stärker, aber nicht unfair (section 12) — a first boss with
+    // 6x health and 1.6x damage on top of already-scaled stats made for a
+    // grindy, punishing fight. Tuned down while staying a clear step up.
+    healthMult: 4.5,
+    damageMult: 1.35,
     sizeMult: 1.6,
     scoreBonus: 5000,
   },
@@ -71,4 +88,74 @@ export const BALANCE = {
     airDrag: 0.98,
     knockbackDecay: 0.9,
   },
+  // Section 1/2: the fight-start protection window (spawn-apart "READY!" →
+  // "FIGHT!" beat) and how passive/hesitant/telegraphed enemies still are
+  // in the first handful of levels. All keyed by campaign level index;
+  // chaos-mode levels (way past this range) fall through to the last entry.
+  combatStart: {
+    // How long the pre-fight protection lasts (no hits possible for either
+    // side, enemy stands still) before combat actually begins. Boss levels
+    // use the existing, separate boss-intro timer instead.
+    readyDurationMs: [
+      { uptoLevel: 1, ms: 2600 },
+      { uptoLevel: 2, ms: 2000 },
+      { uptoLevel: 3, ms: 1700 },
+      { uptoLevel: Infinity, ms: 1500 },
+    ],
+    // How eagerly an enemy takes an attack opportunity once it's in range
+    // (1 = always). Lower values mean visible hesitation/openings.
+    aggression: [
+      { uptoLevel: 2, value: 0.45 },
+      { uptoLevel: 4, value: 0.6 },
+      { uptoLevel: 8, value: 0.75 },
+      { uptoLevel: Infinity, value: 0.9 },
+    ],
+    bossAggression: 0.9,
+    // How long an attack telegraphs (visible windup) before the hit-check
+    // resolves. The player's own attacks stay snappy — this only slows
+    // down enemy/boss swings so they're readable (section 8).
+    enemyTelegraphMs: [
+      { uptoLevel: 2, ms: 420 },
+      { uptoLevel: 4, ms: 340 },
+      { uptoLevel: 8, ms: 260 },
+      { uptoLevel: Infinity, ms: 200 },
+    ],
+    bossTelegraphMs: 260,
+    // Extra cooldown tacked onto an enemy's attack (beyond the weapon's own
+    // cadence) so it can't immediately re-engage — gives the player a real
+    // opening and stops the enemy from just pinning them down (section 7/9).
+    recoveryBonusMs: [
+      { uptoLevel: 3, ms: 480 },
+      { uptoLevel: 6, ms: 320 },
+      { uptoLevel: 10, ms: 180 },
+      { uptoLevel: Infinity, ms: 80 },
+    ],
+  },
 } as const;
+
+function pickByLevel(table: readonly { uptoLevel: number }[], valueKey: string, levelIndex: number): number {
+  for (const entry of table) {
+    if (levelIndex <= entry.uptoLevel) return (entry as unknown as Record<string, number>)[valueKey];
+  }
+  return (table[table.length - 1] as unknown as Record<string, number>)[valueKey];
+}
+
+export function difficultyCurveMultiplier(levelIndex: number): number {
+  return pickByLevel(BALANCE.difficultyCurve, 'multiplier', levelIndex);
+}
+
+export function readyDurationMs(levelIndex: number): number {
+  return pickByLevel(BALANCE.combatStart.readyDurationMs, 'ms', levelIndex);
+}
+
+export function enemyAggression(levelIndex: number, isBoss: boolean): number {
+  return isBoss ? BALANCE.combatStart.bossAggression : pickByLevel(BALANCE.combatStart.aggression, 'value', levelIndex);
+}
+
+export function enemyTelegraphMs(levelIndex: number, isBoss: boolean): number {
+  return isBoss ? BALANCE.combatStart.bossTelegraphMs : pickByLevel(BALANCE.combatStart.enemyTelegraphMs, 'ms', levelIndex);
+}
+
+export function enemyRecoveryBonusMs(levelIndex: number): number {
+  return pickByLevel(BALANCE.combatStart.recoveryBonusMs, 'ms', levelIndex);
+}

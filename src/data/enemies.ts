@@ -8,7 +8,9 @@ export const ENEMIES: Record<string, EnemyDef> = {
     id: 'standard',
     name: 'Standard-Stickman',
     aiType: 'melee',
-    baseStats: { maxHealth: 60, meleeDamage: 8, defense: 0, moveSpeed: 150, attackSpeed: 0.9, attackControl: 1 },
+    // Section 5: the very first opponent — low health/damage, slow, slow
+    // attacks so its (already-lengthened) telegraph has room to read.
+    baseStats: { maxHealth: 45, meleeDamage: 6, defense: 0, moveSpeed: 125, attackSpeed: 0.7, attackControl: 1 },
     scoreValue: 100,
     color: '#2c2c2c',
     accessories: [],

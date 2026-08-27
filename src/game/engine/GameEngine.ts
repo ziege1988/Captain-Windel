@@ -5,7 +5,7 @@ import { ENEMIES } from '../../data/enemies';
 import { BOSSES } from '../../data/bosses';
 import { ARENAS } from '../../data/arenas';
 import { getLevel } from '../../data/levels';
-import { BALANCE } from '../../data/balance';
+import { BALANCE, enemyAggression, enemyRecoveryBonusMs, enemyTelegraphMs, readyDurationMs } from '../../data/balance';
 import { WEAPONS } from '../../data/weapons';
 import { SUPERPOWERS } from '../../data/superpowers';
 import type { SaveData } from '../../storage/saveData';
@@ -19,7 +19,7 @@ import { renderArena, type ArenaLayout } from './renderArena';
 import { renderFighter } from './renderFighter';
 import { applyDefense, resolveHit, scoreForHit } from './combatMath';
 
-export type GamePhase = 'bossIntro' | 'playing' | 'levelWon' | 'gameOver' | 'paused' | 'arenaTransition';
+export type GamePhase = 'ready' | 'bossIntro' | 'playing' | 'levelWon' | 'gameOver' | 'paused' | 'arenaTransition';
 
 export interface HudState {
   phase: GamePhase;
@@ -94,8 +94,10 @@ export class GameEngine {
   bossDefId: string | null = null;
   arenaId = 'meadow';
 
-  phase: GamePhase = 'playing';
+  phase: GamePhase = 'ready';
+  private phaseBeforePause: GamePhase = 'ready';
   bossIntroTimerMs = 0;
+  readyTimerMs = 0;
   levelWonHandled = false;
 
   score = 0;
@@ -189,8 +191,13 @@ export class GameEngine {
   }
 
   setPaused(paused: boolean): void {
-    if (paused && this.phase !== 'gameOver') this.phase = 'paused';
-    else if (!paused && this.phase === 'paused') this.phase = this.isBossLevel && !this.enemy?.introPlayed ? 'bossIntro' : 'playing';
+    if (paused) {
+      if (this.phase === 'gameOver' || this.phase === 'paused') return;
+      this.phaseBeforePause = this.phase;
+      this.phase = 'paused';
+    } else if (this.phase === 'paused') {
+      this.phase = this.phaseBeforePause;
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -205,14 +212,22 @@ export class GameEngine {
     this.projectiles = [];
     this.hazards = [];
 
-    this.player.body.pos.x = this.layout.minX + 130;
+    // Section 1: start with clear daylight between the two fighters rather
+    // than nearly toe-to-toe, so the opening seconds actually feel like a
+    // stand-off instead of an ambush.
+    const innerWidth = this.layout.maxX - this.layout.minX;
+    const startMargin = innerWidth * 0.15;
+
+    this.player.body.pos.x = this.layout.minX + startMargin;
     this.player.body.pos.y = this.layout.groundY;
     this.player.body.vel = { x: 0, y: 0 };
+    this.player.facing = 1;
     this.player.setAnim('idle', true);
 
+    const enemyX = this.layout.maxX - startMargin;
     if (level.isBoss && level.bossId) {
       const def = BOSSES[level.bossId];
-      this.enemy = createBoss(def, this.layout.maxX - 140, this.layout.groundY, level.difficultyScale, level.sizeScale);
+      this.enemy = createBoss(def, enemyX, this.layout.groundY, level.difficultyScale, level.sizeScale);
       this.enemy.setAnim('bossIntro', true);
       this.phase = 'bossIntro';
       this.bossIntroTimerMs = 2600;
@@ -220,9 +235,21 @@ export class GameEngine {
       audio.vibrate([40, 60, 80]);
     } else {
       const def = ENEMIES[level.enemyId] ?? ENEMIES.standard;
-      this.enemy = createEnemy(def, this.layout.maxX - 140, this.layout.groundY, level.difficultyScale, level.sizeScale);
-      this.phase = 'playing';
+      this.enemy = createEnemy(def, enemyX, this.layout.groundY, level.difficultyScale, level.sizeScale);
+      this.enemy.setAnim('idle', true);
+      this.phase = 'ready';
+      this.readyTimerMs = readyDurationMs(index);
+      this.showToast('BEREIT?', this.readyTimerMs);
     }
+    this.enemy.facing = -1;
+
+    // Section 6/7/8: how eager, how telegraphed and how quick-to-recover
+    // this level's enemy/boss is — tapers up over the campaign instead of
+    // every fighter being maximally aggressive from level 1.
+    this.enemy.aggression = enemyAggression(index, level.isBoss);
+    this.enemy.attackTelegraphMs = enemyTelegraphMs(index, level.isBoss);
+    this.enemy.recoveryBonusMs = enemyRecoveryBonusMs(index);
+
     this.levelWonHandled = false;
   }
 
@@ -255,7 +282,7 @@ export class GameEngine {
   }
 
   jump(): void {
-    if (this.phase !== 'playing') return;
+    if (this.phase !== 'playing' && this.phase !== 'ready') return;
     if (!this.player.canAct() || !this.player.body.grounded) return;
     this.player.body.vel.y = -820;
     this.player.body.grounded = false;
@@ -389,6 +416,9 @@ export class GameEngine {
     const weapon = WEAPONS[isKick ? 'fists' : f.weaponId];
     const cooldownBase = isKick ? 480 : 520 / weapon.attackSpeedMult;
     f.attackCooldownRemainingMs = cooldownBase / Math.max(0.4, f.stats.attackSpeed);
+    // Section 7/9: enemies get extra recovery on top of their raw weapon
+    // cadence so they can't just chain-attack the player with no opening.
+    if (f.kind !== 'player') f.attackCooldownRemainingMs += f.recoveryBonusMs;
     (f as Fighter & { pendingHitApplied?: boolean }).pendingHitApplied = false;
     f.weaponFlashMs = 120;
     audio.play('weaponSwing');
@@ -425,7 +455,9 @@ export class GameEngine {
     const dtMs = rawDtMs * timeScale;
     const dtSec = dtMs / 1000;
 
-    if (this.phase === 'bossIntro') {
+    if (this.phase === 'ready') {
+      this.updateReadyPhase(rawDtMs, dtSec);
+    } else if (this.phase === 'bossIntro') {
       this.bossIntroTimerMs -= rawDtMs;
       this.enemy?.updateTimers(rawDtMs);
       if (this.bossIntroTimerMs <= 0 && this.enemy) {
@@ -447,6 +479,49 @@ export class GameEngine {
 
     this.render();
     this.emitHud(rawDtMs);
+  }
+
+  /** Section 1/2: brief pre-fight protection. The player can already move
+   * around and get a feel for the arena; the enemy stands its ground and
+   * neither side can land a hit yet (attack/kick/dodge/block simply no-op
+   * while phase !== 'playing', see the action methods below). Once the
+   * timer runs out combat opens for real and the enemy starts approaching. */
+  private updateReadyPhase(rawDtMs: number, dtSec: number): void {
+    this.readyTimerMs -= rawDtMs;
+    const player = this.player;
+    const enemy = this.enemy;
+
+    player.updateTimers(rawDtMs);
+    if (enemy) enemy.updateTimers(rawDtMs);
+
+    if (player.canAct()) {
+      const speed = player.effectiveMoveSpeed();
+      player.body.vel.x = this.inputMoveDir * speed;
+      if (this.inputMoveDir !== 0) {
+        player.facing = this.inputMoveDir;
+        if (player.anim !== 'block') player.setAnim(player.body.grounded ? 'run' : player.anim);
+      } else if (player.anim === 'run') {
+        player.setAnim('idle');
+      }
+    }
+    if (!player.body.grounded && player.canAct()) {
+      player.setAnim(player.body.vel.y < 0 ? 'jump' : 'fall');
+    }
+    stepPhysics(player.body, dtSec, this.layout.minX, this.layout.maxX);
+    if (player.body.grounded && player.body.vel.y === 0 && (player.anim === 'jump' || player.anim === 'fall')) {
+      player.setAnim('idle');
+    }
+
+    if (enemy) {
+      enemy.facing = player.body.pos.x >= enemy.body.pos.x ? 1 : -1;
+      stepPhysics(enemy.body, dtSec, this.layout.minX, this.layout.maxX);
+    }
+
+    if (this.readyTimerMs <= 0) {
+      this.phase = 'playing';
+      this.showToast('FIGHT!', 900);
+      audio.play('menuTap');
+    }
   }
 
   private updatePlaying(dtMs: number, dtSec: number): void {
@@ -602,7 +677,7 @@ export class GameEngine {
     if (attacker.anim !== 'attack' && attacker.anim !== 'kick') return;
     const applied = (attacker as Fighter & { pendingHitApplied?: boolean }).pendingHitApplied;
     if (applied) return;
-    if (attacker.animTimeMs < 140) return;
+    if (attacker.animTimeMs < attacker.attackTelegraphMs) return;
 
     (attacker as Fighter & { pendingHitApplied?: boolean }).pendingHitApplied = true;
 
@@ -870,9 +945,9 @@ export class GameEngine {
     this.score += Math.max(0, Math.round(amount));
   }
 
-  private showToast(msg: string): void {
+  private showToast(msg: string, durationMs = 1100): void {
     this.toastMessage = msg;
-    this.toastTimerMs = 1100;
+    this.toastTimerMs = durationMs;
   }
 
   // ---------------------------------------------------------------------

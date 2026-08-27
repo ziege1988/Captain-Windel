@@ -41,6 +41,7 @@ export function UpgradeOverlay({ engine, onDone }: Props) {
       const owned = engine.player.equippedUpgradeIds.filter((id) => id === u.id).length;
       const max = u.maxStacks ?? 1;
       if (owned >= max) return false;
+      if ((u.minLevel ?? 1) > engine.levelIndex) return false;
       if (u.grantsWeapon && engine.save.unlockedWeapons.includes(u.grantsWeapon)) return false;
       if (u.grantsAbility && engine.player.equippedUpgradeIds.includes(u.id)) return false;
       return true;

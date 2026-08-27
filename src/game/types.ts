@@ -135,6 +135,7 @@ export interface UpgradeDef {
   grantsAbility?: string; // ability id, e.g. bananaPeel
   modifiers: Partial<StatModifiers>;
   maxStacks?: number; // default 1 (unique), Infinity for stackable
+  minLevel?: number; // earliest campaign level this can be offered on (default 1)
 }
 
 // ---------------------------------------------------------------------------

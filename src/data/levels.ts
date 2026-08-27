@@ -1,5 +1,5 @@
 import type { LevelDef } from '../game/types';
-import { BALANCE } from './balance';
+import { BALANCE, difficultyCurveMultiplier } from './balance';
 import { ARENA_CHAPTERS, CHAOS_ARENA_POOL } from './arenas';
 import { ENEMY_LIST } from './enemies';
 import { BOSS_ORDER } from './bosses';
@@ -10,7 +10,20 @@ import { BOSS_ORDER } from './bosses';
 // every 5th level is a boss level using the matching chapter's boss arena.
 const ENEMY_ROTATION = ENEMY_LIST.map((e) => e.id);
 
+// Section 3/4: the very first fights are hand-pinned rather than rotated —
+// Level 1-2 are unarmed "Standard-Stickman" fights, Level 3 introduces a
+// light weapon (boxing gloves), Level 4 the first noticeably stronger one
+// (club), then Level 5 is the first boss. Strong weapons (spear/axe/sword/
+// bow) only show up much later through the normal rotation below.
+const EARLY_LEVEL_ENEMIES: Record<number, string> = {
+  1: 'standard',
+  2: 'standard',
+  3: 'boxer',
+  4: 'heavy',
+};
+
 function pickEnemyForLevel(levelIndex: number): string {
+  if (EARLY_LEVEL_ENEMIES[levelIndex]) return EARLY_LEVEL_ENEMIES[levelIndex];
   // Weighted-ish rotation: harder enemy archetypes appear more often at
   // higher levels by widening the pool slice as the level increases.
   const unlockedCount = Math.min(
@@ -20,6 +33,12 @@ function pickEnemyForLevel(levelIndex: number): string {
   const pool = ENEMY_ROTATION.slice(0, unlockedCount);
   const idx = (levelIndex * 7 + 3) % pool.length;
   return pool[idx];
+}
+
+// Section 6/10: shared, curve-adjusted scale so the campaign table and
+// Chaos Mode's starting point agree on how strong a "level N" enemy is.
+function campaignDifficultyScale(levelIndex: number): number {
+  return 1 + (levelIndex - 1) * BALANCE.enemyScaling.healthGrowthPerLevel * difficultyCurveMultiplier(levelIndex);
 }
 
 function chapterFor(levelIndex: number) {
@@ -35,7 +54,7 @@ function buildCampaign(): LevelDef[] {
   for (let i = 1; i <= BALANCE.campaign.totalLevels; i++) {
     const isBoss = (BALANCE.campaign.bossLevels as readonly number[]).includes(i);
     const chapter = chapterFor(i);
-    const difficultyScale = 1 + (i - 1) * BALANCE.enemyScaling.healthGrowthPerLevel;
+    const difficultyScale = campaignDifficultyScale(i);
     const sizeScale = Math.min(
       BALANCE.enemyScaling.maxSizeMult,
       1 + (i - 1) * BALANCE.enemyScaling.sizeGrowthPerLevel,
@@ -78,7 +97,7 @@ export function getLevel(index: number): LevelDef {
 export function getChaosLevel(index: number): LevelDef {
   const chaosStep = index - BALANCE.chaos.startLevel + 1;
   const difficultyScale =
-    1 + (BALANCE.campaign.totalLevels - 1) * BALANCE.enemyScaling.healthGrowthPerLevel +
+    campaignDifficultyScale(BALANCE.campaign.totalLevels) +
     chaosStep * BALANCE.chaos.healthGrowthPerLevel;
   const sizeScale = Math.min(
     2.6,

@@ -41,6 +41,9 @@ export const UPGRADES: UpgradeDef[] = [
     equipmentSlot: null,
     grantsWeapon: 'spear',
     modifiers: {},
+    // Section 4: "starke Waffen" (Speer/Axt/Schwert/Bogen) only show up
+    // well after the player has learned the basics — not as an early pick.
+    minLevel: 5,
   },
   {
     id: 'axe_upgrade',
@@ -51,6 +54,7 @@ export const UPGRADES: UpgradeDef[] = [
     equipmentSlot: null,
     grantsWeapon: 'axe',
     modifiers: {},
+    minLevel: 8,
   },
   {
     id: 'sword_upgrade',
@@ -61,6 +65,7 @@ export const UPGRADES: UpgradeDef[] = [
     equipmentSlot: null,
     grantsWeapon: 'sword',
     modifiers: {},
+    minLevel: 6,
   },
   {
     id: 'club_upgrade',
@@ -71,6 +76,7 @@ export const UPGRADES: UpgradeDef[] = [
     equipmentSlot: null,
     grantsWeapon: 'club',
     modifiers: {},
+    minLevel: 3,
   },
   {
     id: 'frypan_upgrade',
@@ -81,6 +87,7 @@ export const UPGRADES: UpgradeDef[] = [
     equipmentSlot: null,
     grantsWeapon: 'frypan',
     modifiers: {},
+    minLevel: 3,
   },
   {
     id: 'bow_upgrade',
@@ -91,6 +98,7 @@ export const UPGRADES: UpgradeDef[] = [
     equipmentSlot: null,
     grantsWeapon: 'bow',
     modifiers: {},
+    minLevel: 8,
   },
   {
     id: 'boomerang_upgrade',
@@ -101,6 +109,7 @@ export const UPGRADES: UpgradeDef[] = [
     equipmentSlot: null,
     grantsWeapon: 'boomerang',
     modifiers: {},
+    minLevel: 6,
   },
   {
     id: 'banana_peel',

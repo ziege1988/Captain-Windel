@@ -66,6 +66,12 @@ export class Fighter {
   bossAbilityCooldownsMs: Record<string, number> = {};
   bossTelegraph: { abilityId: string; remainingMs: number } | null = null;
   introPlayed = false;
+  // How readable/eager this fighter's attacks are (section 7/8 of the
+  // combat-start balance pass). Player keeps the snappy defaults; enemies
+  // get these dialled in per-level by the engine when a level loads.
+  attackTelegraphMs = 140;
+  aggression = 1; // 0..1, chance to actually take an attack opportunity
+  recoveryBonusMs = 0; // extra cooldown tacked onto attacks, beyond the weapon's own cadence
 
   constructor(id: string, kind: FighterKind, name: string, baseStats: StatBlock, x: number, groundY: number) {
     this.id = id;
