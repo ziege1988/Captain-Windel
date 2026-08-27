@@ -40,11 +40,12 @@ export const BALANCE = {
     { uptoLevel: Infinity, multiplier: 1.4 },
   ],
   boss: {
-    // Deutlich stärker, aber nicht unfair (section 12) — a first boss with
-    // 6x health and 1.6x damage on top of already-scaled stats made for a
-    // grindy, punishing fight. Tuned down while staying a clear step up.
-    healthMult: 4.5,
-    damageMult: 1.35,
+    // Deutlich stärker, aber nicht unfair (section 12) — tuned down a
+    // further ~15-20% from the previous 4.5x/1.35x pass, which still felt
+    // too punishing. A boss remains a clear, real step up, just no longer
+    // a grind or an unfair damage race.
+    healthMult: 3.7,
+    damageMult: 1.1,
     sizeMult: 1.6,
     scoreBonus: 5000,
   },
@@ -110,7 +111,10 @@ export const BALANCE = {
       { uptoLevel: 8, value: 0.75 },
       { uptoLevel: Infinity, value: 0.9 },
     ],
-    bossAggression: 0.9,
+    // Also dialled back alongside the health/damage cut above — a boss
+    // that swings less relentlessly reads as challenging rather than
+    // overwhelming.
+    bossAggression: 0.72,
     // How long an attack telegraphs (visible windup) before the hit-check
     // resolves. The player's own attacks stay snappy — this only slows
     // down enemy/boss swings so they're readable (section 8).
@@ -120,7 +124,7 @@ export const BALANCE = {
       { uptoLevel: 8, ms: 260 },
       { uptoLevel: Infinity, ms: 200 },
     ],
-    bossTelegraphMs: 260,
+    bossTelegraphMs: 300,
     // Extra cooldown tacked onto an enemy's attack (beyond the weapon's own
     // cadence) so it can't immediately re-engage — gives the player a real
     // opening and stops the enemy from just pinning them down (section 7/9).
@@ -130,6 +134,18 @@ export const BALANCE = {
       { uptoLevel: 10, ms: 180 },
       { uptoLevel: Infinity, ms: 80 },
     ],
+    // Bosses use their own, level-independent recovery floor rather than
+    // the normal-enemy curve above — otherwise a late-campaign boss (whose
+    // level index falls into the low end of that curve) would end up
+    // attacking almost back-to-back.
+    bossRecoveryBonusMs: 420,
+  },
+  // Section 1 (item pacing pass): items shouldn't feel mandatory after
+  // every single win. Bosses always reward one (they're a real milestone);
+  // normal levels only every other win, so upgrades stay a deliberate,
+  // occasional strategic choice instead of a routine step.
+  upgradePacing: {
+    normalLevelInterval: 2,
   },
 } as const;
 
@@ -156,6 +172,15 @@ export function enemyTelegraphMs(levelIndex: number, isBoss: boolean): number {
   return isBoss ? BALANCE.combatStart.bossTelegraphMs : pickByLevel(BALANCE.combatStart.enemyTelegraphMs, 'ms', levelIndex);
 }
 
-export function enemyRecoveryBonusMs(levelIndex: number): number {
-  return pickByLevel(BALANCE.combatStart.recoveryBonusMs, 'ms', levelIndex);
+export function enemyRecoveryBonusMs(levelIndex: number, isBoss: boolean): number {
+  return isBoss ? BALANCE.combatStart.bossRecoveryBonusMs : pickByLevel(BALANCE.combatStart.recoveryBonusMs, 'ms', levelIndex);
+}
+
+// Section 1 (item pacing pass): should this level's win offer an upgrade
+// choice? Every boss does (it's a milestone); normal levels only every
+// Nth win, so items stay a deliberate, occasional reward rather than a
+// routine step after every fight.
+export function shouldOfferUpgrade(levelIndex: number, isBoss: boolean): boolean {
+  if (isBoss) return true;
+  return levelIndex % BALANCE.upgradePacing.normalLevelInterval === 0;
 }

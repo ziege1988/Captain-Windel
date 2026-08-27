@@ -8,7 +8,7 @@ import { UpgradeOverlay } from '../components/UpgradeOverlay';
 import { CampaignCompleteOverlay } from '../components/CampaignCompleteOverlay';
 import { TutorialOverlay } from '../components/TutorialOverlay';
 import { WEAPONS } from '../data/weapons';
-import { BALANCE } from '../data/balance';
+import { BALANCE, shouldOfferUpgrade } from '../data/balance';
 import { audio } from '../game/audio/audioManager';
 
 type Stage = 'tutorial' | 'playing' | 'paused' | 'campaignComplete' | 'upgrade';
@@ -26,6 +26,7 @@ export function GameScreen() {
   const [hud, setHud] = useState<HudState | null>(null);
   const [stage, setStage] = useState<Stage>(save.tutorialSeen ? 'playing' : 'tutorial');
   const wasLevelWon = useRef(false);
+  const autoAdvanceTimeout = useRef<number | null>(null);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -40,7 +41,17 @@ export function GameScreen() {
         wasLevelWon.current = true;
         const finalBoss = engine.levelIndex === BALANCE.campaign.totalLevels && engine.isBossLevel;
         recordKill(engine.isBossLevel ? (engine.bossDefId ?? undefined) : undefined);
-        setStage(finalBoss ? 'campaignComplete' : 'upgrade');
+        if (finalBoss) {
+          setStage('campaignComplete');
+        } else if (shouldOfferUpgrade(engine.levelIndex, engine.isBossLevel)) {
+          setStage('upgrade');
+        } else {
+          // Not every win needs a new item — briefly acknowledge the
+          // victory (see the engine's "SIEG!" toast) and continue on.
+          autoAdvanceTimeout.current = window.setTimeout(() => {
+            if (engine.phase === 'levelWon') engine.proceedToNextLevel();
+          }, 1300);
+        }
       }
       if (h.phase === 'gameOver' && h.gameOverSummary) {
         finishRun({
@@ -67,6 +78,7 @@ export function GameScreen() {
 
     return () => {
       engine.stop();
+      if (autoAdvanceTimeout.current) window.clearTimeout(autoAdvanceTimeout.current);
       document.removeEventListener('touchmove', preventTouch);
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('orientationchange', handleResize);
@@ -112,7 +124,14 @@ export function GameScreen() {
 
       {engine && stage === 'paused' && (
         <PauseOverlay
-          onResume={() => { engine.setPaused(false); setStage('playing'); }}
+          onResume={() => {
+            engine.setPaused(false);
+            setStage('playing');
+            // If the level was won (and skipping the upgrade screen) while
+            // paused, its auto-advance timer fired into a paused engine and
+            // no-opped — pick it back up now instead of staying stuck.
+            if (engine.phase === 'levelWon') engine.proceedToNextLevel();
+          }}
           onRestartLevel={() => { engine.restartFromLevel(engine.levelIndex); engine.setPaused(false); setStage('playing'); }}
           onMainMenu={() => { setScreen('mainMenu'); }}
         />

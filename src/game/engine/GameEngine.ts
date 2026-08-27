@@ -73,6 +73,14 @@ const FALLBACK_WIDTH = 390;
 const FALLBACK_HEIGHT = 664;
 const ARENA_SIDE_PADDING = 34;
 const GROUND_FRACTION = 0.64;
+// The arena is rendered zoomed out a bit: the "world" (the coordinate
+// space fighters/hazards/physics actually live in, i.e. everything on
+// `this.layout`) is 1/ARENA_ZOOM times bigger than the physical screen,
+// and the canvas transform compresses it back down to fit — so there's
+// more world-space to move around in (more room, more reachable distance
+// before weapon ranges kick in) while the whole arena still always fits
+// entirely on screen with no side-scrolling camera at all.
+const ARENA_ZOOM = 0.82;
 
 export class GameEngine {
   private ctx: CanvasRenderingContext2D;
@@ -153,14 +161,16 @@ export class GameEngine {
     this.canvas.height = Math.max(1, Math.round(cssHeight * dpr));
     this.canvas.style.width = `${cssWidth}px`;
     this.canvas.style.height = `${cssHeight}px`;
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.ctx.setTransform(dpr * ARENA_ZOOM, 0, 0, dpr * ARENA_ZOOM, 0, 0);
 
+    const worldWidth = cssWidth / ARENA_ZOOM;
+    const worldHeight = cssHeight / ARENA_ZOOM;
     this.layout = {
-      width: cssWidth,
-      height: cssHeight,
-      groundY: cssHeight * GROUND_FRACTION,
+      width: worldWidth,
+      height: worldHeight,
+      groundY: worldHeight * GROUND_FRACTION,
       minX: ARENA_SIDE_PADDING,
-      maxX: cssWidth - ARENA_SIDE_PADDING,
+      maxX: worldWidth - ARENA_SIDE_PADDING,
     };
 
     for (const f of [this.player, this.enemy]) {
@@ -248,7 +258,7 @@ export class GameEngine {
     // every fighter being maximally aggressive from level 1.
     this.enemy.aggression = enemyAggression(index, level.isBoss);
     this.enemy.attackTelegraphMs = enemyTelegraphMs(index, level.isBoss);
-    this.enemy.recoveryBonusMs = enemyRecoveryBonusMs(index);
+    this.enemy.recoveryBonusMs = enemyRecoveryBonusMs(index, level.isBoss);
 
     this.levelWonHandled = false;
   }
@@ -813,6 +823,9 @@ export class GameEngine {
       this.addScore(enemy.scoreValue);
     }
     this.phase = 'levelWon';
+    // Visible on levels that skip the upgrade screen (see GameScreen) —
+    // where an upgrade follows, the overlay covers it immediately anyway.
+    this.showToast('SIEG!', 1300);
   }
 
   private handlePlayerDefeated(): void {
