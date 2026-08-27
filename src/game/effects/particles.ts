@@ -1,0 +1,116 @@
+import type { Vec2 } from '../types';
+
+export type ParticleShape = 'circle' | 'ring' | 'dust' | 'spark' | 'cloud' | 'drop';
+
+export interface Particle {
+  pos: Vec2;
+  vel: Vec2;
+  life: number; // seconds remaining
+  maxLife: number;
+  size: number;
+  color: string;
+  shape: ParticleShape;
+  gravity: number;
+  fade: boolean;
+  rotation: number;
+  rotSpeed: number;
+}
+
+// Section 9/10/26: a single lightweight particle pool shared by every
+// effect (hits, vomit, farts, weapon trails). Kept intentionally simple —
+// no external effects library.
+export class ParticleSystem {
+  particles: Particle[] = [];
+  private maxParticles = 260;
+
+  spawn(p: Partial<Particle> & { pos: Vec2 }): void {
+    if (this.particles.length >= this.maxParticles) this.particles.shift();
+    this.particles.push({
+      vel: { x: 0, y: 0 },
+      life: 0.5,
+      maxLife: 0.5,
+      size: 6,
+      color: '#ffffff',
+      shape: 'circle',
+      gravity: 0,
+      fade: true,
+      rotation: 0,
+      rotSpeed: 0,
+      ...p,
+    });
+  }
+
+  burst(pos: Vec2, count: number, opts: Partial<Particle> = {}): void {
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 60 + Math.random() * 160;
+      this.spawn({
+        pos: { x: pos.x, y: pos.y },
+        vel: { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed - 40 },
+        life: 0.35 + Math.random() * 0.35,
+        maxLife: 0.7,
+        size: 3 + Math.random() * 5,
+        gravity: 500,
+        ...opts,
+      });
+    }
+  }
+
+  update(dt: number): void {
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const p = this.particles[i];
+      p.life -= dt;
+      if (p.life <= 0) {
+        this.particles.splice(i, 1);
+        continue;
+      }
+      p.vel.y += p.gravity * dt;
+      p.pos.x += p.vel.x * dt;
+      p.pos.y += p.vel.y * dt;
+      p.rotation += p.rotSpeed * dt;
+    }
+  }
+
+  clear(): void {
+    this.particles.length = 0;
+  }
+
+  render(ctx: CanvasRenderingContext2D): void {
+    for (const p of this.particles) {
+      const alpha = p.fade ? Math.max(0, p.life / p.maxLife) : 1;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(p.pos.x, p.pos.y);
+      ctx.rotate(p.rotation);
+      ctx.fillStyle = p.color;
+      ctx.strokeStyle = p.color;
+      switch (p.shape) {
+        case 'ring':
+          ctx.lineWidth = Math.max(1, p.size * 0.35);
+          ctx.beginPath();
+          ctx.arc(0, 0, p.size, 0, Math.PI * 2);
+          ctx.stroke();
+          break;
+        case 'dust':
+        case 'cloud':
+          ctx.beginPath();
+          ctx.ellipse(0, 0, p.size * 1.3, p.size * 0.9, 0, 0, Math.PI * 2);
+          ctx.fill();
+          break;
+        case 'spark':
+          ctx.fillRect(-p.size / 2, -1, p.size, 2);
+          break;
+        case 'drop':
+          ctx.beginPath();
+          ctx.ellipse(0, 0, p.size * 0.6, p.size, 0, 0, Math.PI * 2);
+          ctx.fill();
+          break;
+        default:
+          ctx.beginPath();
+          ctx.arc(0, 0, p.size, 0, Math.PI * 2);
+          ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+}
