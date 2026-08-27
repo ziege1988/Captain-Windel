@@ -24,8 +24,41 @@ export function TouchControls({ engine, equippedSuperpowers, cooldowns, weaponNa
 
   return (
     <div style={touchLayerStyle}>
-      {/* Left cluster: movement + jump */}
+      {/* Left cluster: superpowers (off-center, out of the way — section
+          1 of the polish pass), movement + jump */}
       <div style={leftClusterStyle}>
+        <div style={superpowerRowStyle}>
+          {equippedSuperpowers.map((id, i) => {
+            if (!id) return <div key={i} style={{ width: 44, height: 44 }} />;
+            const def = SUPERPOWERS[id];
+            const cd = cooldowns[id] ?? 0;
+            const ready = cd <= 0;
+            return (
+              <button
+                key={id}
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  audio.unlock();
+                  if (ready) engine.useSuperpower(id);
+                }}
+                style={{
+                  width: 44, height: 44, borderRadius: '50%',
+                  background: ready ? def.color : 'rgba(255,255,255,0.15)',
+                  border: '2px solid rgba(255,255,255,0.4)',
+                  fontSize: 19, position: 'relative', opacity: ready ? 1 : 0.5,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
+              >
+                {def.icon}
+                {!ready && (
+                  <span style={{ position: 'absolute', bottom: -15, fontSize: 9, color: '#fff' }}>
+                    {Math.ceil(cd / 1000)}s
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
         <div style={dpadRowStyle}>
           <TouchButton label="◀" size={64} onDown={() => setDir(-1)} onUp={() => activeDir.current === -1 && setDir(0)} />
           <TouchButton label="▶" size={64} onDown={() => setDir(1)} onUp={() => activeDir.current === 1 && setDir(0)} />
@@ -49,40 +82,6 @@ export function TouchControls({ engine, equippedSuperpowers, cooldowns, weaponNa
           )}
           <TouchButton label="⇄ WAFFE" size={50} onDown={() => engine.cycleWeapon()} />
         </div>
-      </div>
-
-      {/* Superpower slots */}
-      <div style={superpowerRowStyle}>
-        {equippedSuperpowers.map((id, i) => {
-          if (!id) return <div key={i} style={{ width: 56, height: 56 }} />;
-          const def = SUPERPOWERS[id];
-          const cd = cooldowns[id] ?? 0;
-          const ready = cd <= 0;
-          return (
-            <button
-              key={id}
-              onPointerDown={(e) => {
-                e.preventDefault();
-                audio.unlock();
-                if (ready) engine.useSuperpower(id);
-              }}
-              style={{
-                width: 56, height: 56, borderRadius: '50%',
-                background: ready ? def.color : 'rgba(255,255,255,0.15)',
-                border: '2px solid rgba(255,255,255,0.4)',
-                fontSize: 24, position: 'relative', opacity: ready ? 1 : 0.5,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}
-            >
-              {def.icon}
-              {!ready && (
-                <span style={{ position: 'absolute', bottom: -16, fontSize: 10, color: '#fff' }}>
-                  {Math.ceil(cd / 1000)}s
-                </span>
-              )}
-            </button>
-          );
-        })}
       </div>
     </div>
   );
@@ -142,7 +141,10 @@ const rightClusterStyle: CSSProperties = {
 const dpadRowStyle: CSSProperties = { display: 'flex', gap: 10 };
 const comboRowStyle: CSSProperties = { display: 'flex', gap: 8 };
 
+// Section 1 (polish pass): superpowers used to float dead-center over the
+// arena, right on top of the fighters' animations. Anchored to the left
+// control cluster instead — off to the side, out of the fighters' way,
+// still reachable by the same thumb that handles movement.
 const superpowerRowStyle: CSSProperties = {
-  position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: 'calc(180px + env(safe-area-inset-bottom, 0px))',
-  display: 'flex', gap: 10, pointerEvents: 'auto',
+  display: 'flex', gap: 8, marginBottom: 2,
 };

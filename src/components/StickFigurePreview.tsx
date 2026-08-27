@@ -43,7 +43,7 @@ export function StickFigurePreview() {
       ctx.lineTo(w - 10, groundY);
       ctx.stroke();
       ctx.restore();
-      renderFighter(ctx, f);
+      renderFighter(ctx, f, dt / 1000);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);

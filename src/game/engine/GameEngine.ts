@@ -63,6 +63,17 @@ interface Hazard {
   triggered: boolean;
 }
 
+// Section 6 (polish pass): a short-lived, floating comic-book-style sound
+// effect ("Faaarrt…") spawned next to a fighter's rear on every fart.
+interface ComicText {
+  text: string;
+  x: number;
+  y: number;
+  ageMs: number;
+  lifeMs: number;
+  color: string;
+}
+
 let hazardCounter = 0;
 let projectileCounter = 0;
 
@@ -121,6 +132,7 @@ export class GameEngine {
 
   projectiles: Projectile[] = [];
   hazards: Hazard[] = [];
+  comicTexts: ComicText[] = [];
 
   superpowerCooldowns: Map<SuperpowerId, number> = new Map();
   save: SaveData;
@@ -354,25 +366,24 @@ export class GameEngine {
     const def = SUPERPOWERS[id];
     this.superpowerCooldowns.set(id, def.cooldownMs);
     this.player.setAnim('fart', true);
-    this.player.hitstunRemainingMs = 500;
+    // Section 7 (polish pass): covers the full prep -> main beat -> return
+    // motion (see the 'fart' pose in renderFighter.ts) so the player isn't
+    // snapped back to idle mid-animation.
+    this.player.hitstunRemainingMs = 700;
     audio.play('superpower');
     audio.vibrate([30, 40, 60, 40, 90]);
     this.shake.add(0.5);
 
-    window.setTimeout(() => this.fireSuperpower(id), 260);
+    // Fires right in the deep-crouch "letting it rip" beat of the pose.
+    window.setTimeout(() => this.fireSuperpower(id), 380);
   }
 
   private fireSuperpower(id: SuperpowerId): void {
     if (!this.enemy || this.enemy.isDead) return;
     const def = SUPERPOWERS[id];
-    const dir = -this.player.facing;
-    const originX = this.player.body.pos.x + dir * 30;
-    const originY = this.layout.groundY - 40;
-
-    this.particles.burst({ x: originX, y: originY }, 22, {
-      color: def.color, shape: id === 'nuclear' ? 'ring' : 'cloud', size: 10, life: 0.6, maxLife: 0.6, gravity: -40,
-    });
-    audio.play('fart');
+    // Section 5 (polish pass): ~35% bigger cloud than before, still a
+    // brief puff rather than a screen-filling effect.
+    this.triggerFartEffect(this.player, def.color, 1.35, id === 'nuclear' ? 'ring' : 'cloud');
 
     const hitsEnemy = distance(this.player.body.pos, this.enemy.body.pos) < 340;
     if (!hitsEnemy) return;
@@ -481,13 +492,14 @@ export class GameEngine {
 
     this.shake.update(rawDtMs / 1000);
     this.particles.update(dtSec);
+    this.updateComicTexts(rawDtMs);
 
     if (this.toastTimerMs > 0) {
       this.toastTimerMs -= rawDtMs;
       if (this.toastTimerMs <= 0) this.toastMessage = null;
     }
 
-    this.render();
+    this.render(dtSec);
     this.emitHud(rawDtMs);
   }
 
@@ -551,6 +563,18 @@ export class GameEngine {
         player.facing = this.inputMoveDir;
         if (player.anim !== 'block') player.setAnim(player.body.grounded ? 'run' : player.anim);
       } else if (player.anim === 'run') {
+        player.setAnim('idle');
+      } else if ((player.anim === 'attack' || player.anim === 'kick') && player.attackCooldownRemainingMs <= 0) {
+        // Section 2 (polish pass): without this, standing still after a
+        // swing left the player frozen in the attack pose indefinitely —
+        // the next attack would then "start" from a pose that never
+        // returned to neutral. Reverting to idle once the swing's own
+        // recovery is done lets attack -> idle -> next attack read as one
+        // continuous motion instead of a jump-cut.
+        player.setAnim('idle');
+      } else if (player.anim === 'fart' || player.anim === 'superpower' || player.anim === 'hit' || player.anim === 'stagger') {
+        // Reaching this branch already means canAct() is true, i.e. any
+        // hitstun/lockout behind these poses has expired — safe to settle.
         player.setAnim('idle');
       }
     } else if (!player.body.grounded) {
@@ -631,7 +655,13 @@ export class GameEngine {
       enemy.setAnim('run');
     } else {
       enemy.body.vel.x *= 0.7;
-      if (enemy.anim === 'run') enemy.setAnim('idle');
+      if (enemy.anim === 'run') {
+        enemy.setAnim('idle');
+      } else if ((enemy.anim === 'attack' || enemy.anim === 'kick') && enemy.attackCooldownRemainingMs <= 0) {
+        enemy.setAnim('idle');
+      } else if (enemy.anim === 'hit' || enemy.anim === 'stagger') {
+        enemy.setAnim('idle');
+      }
       enemy.facing = this.player.body.pos.x >= enemy.body.pos.x ? 1 : -1;
     }
     if (decision.wantsBlock) enemy.setAnim('block');
@@ -795,8 +825,7 @@ export class GameEngine {
         if (f.deathTimerMs <= 0) {
           f.deathPhase = 'fart';
           f.deathTimerMs = 550;
-          audio.play('fart');
-          this.particles.burst({ x: f.body.pos.x - f.facing * 20, y: f.body.groundY - 8 }, 12, { color: '#9ccc65', shape: 'cloud', size: 8, life: 0.8, maxLife: 0.8, gravity: -20 });
+          this.triggerFartEffect(f, '#9ccc65', 1.35);
           this.shake.add(0.15);
         }
         break;
@@ -964,10 +993,67 @@ export class GameEngine {
   }
 
   // ---------------------------------------------------------------------
+  // Fart effect (shared by the active superpowers and the death sequence)
+  // ---------------------------------------------------------------------
+
+  /** Section 4-7 (polish pass): one shared trigger for every "Furz" so the
+   * gas cloud size, comic text and sound stay consistent everywhere a fart
+   * happens — whether it's an active superpower or a defeated fighter's
+   * last breath. `sizeMult` scales the cloud (superpowers/death-fart use
+   * ~1.35x, i.e. the requested +30-40%, on top of the old baseline). */
+  private triggerFartEffect(f: Fighter, color: string, sizeMult = 1, shape: 'cloud' | 'ring' = 'cloud'): void {
+    const dir = -f.facing;
+    const originX = f.body.pos.x + dir * 42;
+    const originY = f.body.groundY - 55;
+    this.particles.burst({ x: originX, y: originY }, Math.round(16 * sizeMult), {
+      color, shape, size: 10 * sizeMult, life: 0.75, maxLife: 0.75, gravity: -35,
+    });
+    this.spawnComicText('Faaarrt…', originX, originY - 16);
+    audio.playFart();
+  }
+
+  private spawnComicText(text: string, x: number, y: number, color = '#fff8e1'): void {
+    this.comicTexts.push({ text, x, y, ageMs: 0, lifeMs: 900, color });
+    if (this.comicTexts.length > 6) this.comicTexts.shift();
+  }
+
+  private updateComicTexts(dtMs: number): void {
+    for (let i = this.comicTexts.length - 1; i >= 0; i--) {
+      const c = this.comicTexts[i];
+      c.ageMs += dtMs;
+      if (c.ageMs >= c.lifeMs) this.comicTexts.splice(i, 1);
+    }
+  }
+
+  private renderComicTexts(ctx: CanvasRenderingContext2D): void {
+    for (const c of this.comicTexts) {
+      const p = c.ageMs / c.lifeMs;
+      const popIn = Math.min(1, c.ageMs / 120);
+      const wobble = Math.sin(c.ageMs / 90) * 4;
+      const rise = -p * 46;
+      const alpha = p < 0.65 ? 1 : Math.max(0, 1 - (p - 0.65) / 0.35);
+      ctx.save();
+      ctx.translate(c.x + wobble, c.y + rise);
+      ctx.scale(popIn, popIn);
+      ctx.globalAlpha = alpha;
+      ctx.font = "bold 22px 'Comic Sans MS', 'Segoe UI', sans-serif";
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = '#4a2f00';
+      ctx.lineWidth = 4;
+      ctx.strokeText(c.text, 0, 0);
+      ctx.fillStyle = c.color;
+      ctx.fillText(c.text, 0, 0);
+      ctx.restore();
+    }
+  }
+
+  // ---------------------------------------------------------------------
   // Rendering
   // ---------------------------------------------------------------------
 
-  private render(): void {
+  private render(dtSec: number): void {
     const ctx = this.ctx;
     const arena = ARENAS[this.arenaId] ?? ARENAS.meadow;
     const t = (performance.now() - this.accumStartTime) / 1000;
@@ -988,9 +1074,10 @@ export class GameEngine {
 
     const fighters = [this.player, this.enemy].filter((f): f is Fighter => !!f);
     fighters.sort((a, b) => a.body.pos.y - b.body.pos.y);
-    for (const f of fighters) renderFighter(ctx, f);
+    for (const f of fighters) renderFighter(ctx, f, dtSec);
 
     this.particles.render(ctx);
+    this.renderComicTexts(ctx);
     ctx.restore();
   }
 

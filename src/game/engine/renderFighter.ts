@@ -34,6 +34,37 @@ function blend(a: Pose, b: Pose, t: number): Pose {
   return out as unknown as Pose;
 }
 
+// Section 2 (polish pass): computePose() below is a pure function of
+// anim/animTimeMs, so switching anim used to make the drawn pose *jump*
+// straight to the new target every frame — most visible on kicks/attacks,
+// which read as an abrupt, disconnected frame rather than a motion. This
+// cache holds the last *displayed* pose per fighter so render() can ease
+// toward the target each frame instead of snapping to it. It's purely a
+// rendering-layer smoothing pass: hit-checks and input handling still key
+// off the real animTimeMs/anim in GameEngine, so nothing about combat
+// timing or responsiveness changes — only how the motion in between reads.
+const displayPoseCache = new WeakMap<Fighter, Pose>();
+// Time constant in seconds: how quickly the displayed pose closes the gap
+// to the target. Small enough to stay snappy (~80% closed within 60ms)
+// while still smoothing out the jump-cut between poses.
+const POSE_SMOOTHING_TAU = 0.035;
+
+function smoothPose(f: Fighter, target: Pose, dtSec: number): Pose {
+  const previous = displayPoseCache.get(f);
+  if (!previous || dtSec <= 0 || dtSec > 0.5) {
+    displayPoseCache.set(f, target);
+    return target;
+  }
+  const amount = 1 - Math.exp(-dtSec / POSE_SMOOTHING_TAU);
+  const out: Record<string, number> = {};
+  for (const key of Object.keys(target) as (keyof Pose)[]) {
+    out[key] = lerp(previous[key], target[key], amount);
+  }
+  const smoothed = out as unknown as Pose;
+  displayPoseCache.set(f, smoothed);
+  return smoothed;
+}
+
 function computePose(f: Fighter): Pose {
   const t = f.animTimeMs / 1000;
   const cycle = Math.sin(t * 9);
@@ -93,12 +124,38 @@ function computePose(f: Fighter): Pose {
     case 'vomit':
       return { ...STAND, bodyLean: 0.5, hipY: 4, armFrontX: 14, armFrontY: 30, armBackX: 12, armBackY: 32, headOffsetY: 10 };
     case 'superpower':
-    case 'fart':
+    case 'fart': {
+      // Section 7 (polish pass): a clear three-beat motion instead of one
+      // continuous ramp — Vorbereitung (turn+start crouching), then a
+      // deliberate deep-crouch "letting it rip" beat, then a short ease
+      // back toward neutral. Timed to land the GameEngine's actual
+      // superpower payload (fired at 0.38s) right in the deep-crouch beat.
+      const prepEnd = 0.15;
+      const mainEnd = 0.42;
+      const totalEnd = 0.68;
+      let turned: number, crouch: number, cape: number;
+      if (t < prepEnd) {
+        const p = t / prepEnd;
+        turned = p * 0.7;
+        crouch = p * 5;
+        cape = 0;
+      } else if (t < mainEnd) {
+        const p = (t - prepEnd) / (mainEnd - prepEnd);
+        turned = 0.7 + p * 0.3;
+        crouch = 5 + p * 9;
+        cape = p;
+      } else {
+        const p = Math.min(1, (t - mainEnd) / (totalEnd - mainEnd));
+        turned = 1 - p * 0.35;
+        crouch = 14 - p * 9;
+        cape = 1 - p * 0.6;
+      }
       return {
-        ...STAND, turnedAway: 1, bodyLean: 0.3, hipY: 10,
+        ...STAND, turnedAway: turned, bodyLean: 0.3, hipY: crouch,
         armFrontX: -16, armFrontY: 14, armBackX: -16, armBackY: 14,
-        capeKick: Math.min(1, t / 0.3),
+        capeKick: cape,
       };
+    }
     case 'dead':
       return { ...STAND, flatten: 1, hipY: 0 };
     case 'bossIntro':
@@ -112,20 +169,34 @@ function computePose(f: Fighter): Pose {
   }
 }
 
+// Section 3 (polish pass): the physics ground position (pos.y === groundY
+// when grounded) sits *exactly* on the drawn ground line, but the pose
+// rig's own leg lengths land the feet a couple of units short of that line
+// in several poses (most visibly at the top of the run-cycle bounce) —
+// reading as a faint hover. A fixed extra sink applied only while grounded
+// plants the feet solidly on the line in every pose without touching any
+// pose's numbers individually, and it never applies mid-air, so jumping
+// still lifts cleanly off the ground and lands back on it (section 3).
+const GROUND_EMBED = 8;
+
 /** Draws Captain Windel / an enemy / a boss as a minimalist stick figure
  * with an animated cape and layered visual equipment (section 6/21). The
  * figure is always instantly readable as a stickman — spectacle comes from
- * effects layered around it, not from the figure itself (section 47/63). */
-export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter): void {
+ * effects layered around it, not from the figure itself (section 47/63).
+ * `dtSec` drives the pose-smoothing pass (section 2) — pass 0 to snap
+ * straight to the target pose (e.g. for a one-off static preview render). */
+export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec = 0): void {
   if (f.deathPhase === 'done') return;
-  const pose = computePose(f);
+  const target = computePose(f);
+  const pose = smoothPose(f, target, dtSec);
   const scale = f.scale;
   const x = f.body.pos.x;
   const groundY = f.body.groundY;
   const airLift = groundY - f.body.pos.y;
+  const groundEmbed = f.body.grounded ? GROUND_EMBED : 0;
 
   ctx.save();
-  ctx.translate(x, groundY - airLift);
+  ctx.translate(x, groundY - airLift + groundEmbed);
   ctx.scale(f.facing * scale, scale);
 
   if (pose.flatten > 0.5) {
