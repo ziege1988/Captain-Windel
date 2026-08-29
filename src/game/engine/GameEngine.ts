@@ -382,8 +382,17 @@ export class GameEngine {
     if (!this.enemy || this.enemy.isDead) return;
     const def = SUPERPOWERS[id];
     // Section 5 (polish pass): ~35% bigger cloud than before, still a
-    // brief puff rather than a screen-filling effect.
-    this.triggerFartEffect(this.player, def.color, 1.35, id === 'nuclear' ? 'ring' : 'cloud');
+    // brief puff rather than a screen-filling effect. towardFacing=true
+    // (section 7/9) so the effect is clearly aimed at the enemy — the
+    // character is oriented at them, not puffing off into empty space.
+    this.triggerFartEffect(this.player, def.color, 1.35, id === 'nuclear' ? 'ring' : 'cloud', true);
+    const dirAngle = this.player.facing > 0 ? 0 : Math.PI;
+    this.fireSuperpowerVisual(
+      id,
+      this.player.body.pos.x + this.player.facing * 42,
+      this.player.body.groundY - 55,
+      dirAngle,
+    );
 
     const hitsEnemy = distance(this.player.body.pos, this.enemy.body.pos) < 340;
     if (!hitsEnemy) return;
@@ -645,6 +654,32 @@ export class GameEngine {
         // holds still while telegraphing
         enemy.body.vel.x *= 0.8;
         return;
+      }
+
+      // Occasional idle taunt/gesture (boss individuality polish pass) —
+      // only plays while the boss isn't closing in for an attack, so it
+      // never delays or replaces real combat behaviour or attack uptime.
+      if (enemy.tauntActiveMs > 0) {
+        enemy.tauntActiveMs -= dtMs;
+        enemy.body.vel.x *= 0.7;
+        if (enemy.tauntActiveMs <= 0) {
+          enemy.setAnim('idle');
+        } else {
+          return;
+        }
+      } else {
+        enemy.gestureCooldownMs -= dtMs;
+        if (enemy.gestureCooldownMs <= 0) {
+          if (dist > enemy.preferredRange * 1.3 && enemy.canAct()) {
+            enemy.tauntVariant = (enemy.tauntVariant + 1) % 3;
+            enemy.setAnim('taunt', true);
+            enemy.tauntActiveMs = 900;
+            enemy.gestureCooldownMs = 13000 + Math.random() * 6000;
+            enemy.body.vel.x = 0;
+            return;
+          }
+          enemy.gestureCooldownMs = 500;
+        }
       }
     }
 
@@ -1001,8 +1036,13 @@ export class GameEngine {
    * happens — whether it's an active superpower or a defeated fighter's
    * last breath. `sizeMult` scales the cloud (superpowers/death-fart use
    * ~1.35x, i.e. the requested +30-40%, on top of the old baseline). */
-  private triggerFartEffect(f: Fighter, color: string, sizeMult = 1, shape: 'cloud' | 'ring' = 'cloud'): void {
-    const dir = -f.facing;
+  private triggerFartEffect(f: Fighter, color: string, sizeMult = 1, shape: 'cloud' | 'ring' = 'cloud', towardFacing = false): void {
+    // Section 7 (polish pass): active superpowers aim the effect at the
+    // enemy (towardFacing=true — the character is oriented at them, so the
+    // cloud/blast originates and drifts on that side), while the death-fart
+    // keeps its original behind-the-back puff (towardFacing=false, default)
+    // since nothing is being aimed at anyone there.
+    const dir = towardFacing ? f.facing : -f.facing;
     const originX = f.body.pos.x + dir * 42;
     const originY = f.body.groundY - 55;
     this.particles.burst({ x: originX, y: originY }, Math.round(16 * sizeMult), {
@@ -1010,6 +1050,57 @@ export class GameEngine {
     });
     this.spawnComicText('Faaarrt…', originX, originY - 16);
     audio.playFart();
+  }
+
+  // Section 7-9 (polish pass): one shared "aimed" burst per superpower id,
+  // layered on top of triggerFartEffect's base cloud/sound/text (which stay
+  // unchanged). Each id gets its own shape/reach/behaviour so the release
+  // reads as that power specifically, and everything is biased toward
+  // `dirAngle` (the direction the character/butt is actually oriented,
+  // i.e. facing the enemy) instead of exploding evenly in every direction.
+  private fireSuperpowerVisual(id: SuperpowerId, originX: number, originY: number, dirAngle: number): void {
+    switch (id) {
+      case 'gasCloud':
+        this.particles.burstDirectional({ x: originX, y: originY }, 14, dirAngle, 0.7, {
+          color: SUPERPOWERS.gasCloud.color, shape: 'cloud', size: 9, life: 0.6, maxLife: 0.6, gravity: -25,
+        });
+        break;
+      case 'chili': {
+        // Flicker: a few staggered waves along the same direction instead
+        // of one flat burst, so the flame visibly licks/reaches outward
+        // rather than popping in as a single static shape.
+        for (let wave = 0; wave < 3; wave++) {
+          window.setTimeout(() => {
+            if (!this.enemy) return;
+            this.particles.burstDirectional({ x: originX, y: originY }, 9, dirAngle, 0.3, {
+              color: wave % 2 === 0 ? '#ff7043' : '#ffca28',
+              shape: 'drop', size: 9 - wave, life: 0.32, maxLife: 0.32, gravity: -70,
+            });
+          }, wave * 70);
+        }
+        break;
+      }
+      case 'ice':
+        this.particles.burstDirectional({ x: originX, y: originY }, 12, dirAngle, 0.18, {
+          color: '#81d4fa', shape: 'circle', size: 5, life: 0.5, maxLife: 0.5, gravity: 0,
+        });
+        break;
+      case 'electro':
+        this.particles.burstDirectional({ x: originX, y: originY }, 10, dirAngle, 0.45, {
+          color: '#ffeb3b', shape: 'spark', size: 10, life: 0.28, maxLife: 0.28, gravity: 0,
+        });
+        break;
+      case 'tornado':
+        this.particles.burst({ x: originX, y: originY }, 16, {
+          color: '#cfd8dc', shape: 'dust', size: 7, life: 0.5, maxLife: 0.5, gravity: 0,
+        });
+        break;
+      case 'nuclear':
+        this.particles.burst({ x: originX, y: originY }, 10, {
+          color: '#ff8a65', shape: 'spark', size: 8, life: 0.5, maxLife: 0.5, gravity: -100,
+        });
+        break;
+    }
   }
 
   private spawnComicText(text: string, x: number, y: number, color = '#fff8e1'): void {

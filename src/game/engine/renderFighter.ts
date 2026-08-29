@@ -133,27 +133,66 @@ function computePose(f: Fighter): Pose {
       const prepEnd = 0.15;
       const mainEnd = 0.42;
       const totalEnd = 0.68;
-      let turned: number, crouch: number, cape: number;
+      let turned: number, crouch: number, cape: number, lean: number, armX: number, armY: number;
       if (t < prepEnd) {
         const p = t / prepEnd;
+        // Section 7/8/9 (polish pass): a brief announcing flinch (a quick
+        // backward lean) before the body actually bends into position —
+        // "press button -> character performs a matching movement" rather
+        // than snapping straight into the crouch.
+        const windup = Math.sin(p * Math.PI) * 0.12;
         turned = p * 0.7;
         crouch = p * 5;
         cape = 0;
+        lean = p * 0.3 - windup;
+        armX = -16 * p;
+        armY = 26 - 12 * p;
       } else if (t < mainEnd) {
         const p = (t - prepEnd) / (mainEnd - prepEnd);
         turned = 0.7 + p * 0.3;
         crouch = 5 + p * 9;
         cape = p;
+        lean = 0.3;
+        armX = -16;
+        armY = 14;
       } else {
         const p = Math.min(1, (t - mainEnd) / (totalEnd - mainEnd));
         turned = 1 - p * 0.35;
         crouch = 14 - p * 9;
         cape = 1 - p * 0.6;
+        lean = 0.3 - p * 0.3;
+        armX = -16 + p * 16;
+        armY = 14 + p * 12;
       }
       return {
-        ...STAND, turnedAway: turned, bodyLean: 0.3, hipY: crouch,
-        armFrontX: -16, armFrontY: 14, armBackX: -16, armBackY: 14,
+        ...STAND, turnedAway: turned, bodyLean: lean, hipY: crouch,
+        armFrontX: armX, armFrontY: armY, armBackX: armX, armBackY: armY,
         capeKick: cape,
+      };
+    }
+    case 'taunt': {
+      // Boss individuality polish pass: three lightweight gesture variants
+      // reused across bosses (the clown cycles through all three; every
+      // other boss also cycles, just less centrally, per f.tauntVariant).
+      const variant = f.tauntVariant % 3;
+      if (variant === 0) {
+        // Lean forward, hands resting on the belly.
+        return {
+          ...STAND, bodyLean: 0.36, hipY: 3, headOffsetY: 3,
+          armFrontX: -9, armFrontY: 22, armBackX: -13, armBackY: 22,
+        };
+      } else if (variant === 1) {
+        // Point an arm forward, provoking the player.
+        return {
+          ...STAND, bodyLean: 0.1,
+          armFrontX: 30, armFrontY: 2, armBackX: -10, armBackY: 26,
+        };
+      }
+      // Arms thrown up, laughing, head tilted back a little.
+      const laugh = Math.sin(t * 15) * 3;
+      return {
+        ...STAND, bodyLean: -0.12, headOffsetX: 3, headOffsetY: laugh,
+        armFrontX: -6, armFrontY: -8, armBackX: -14, armBackY: -5,
       };
     }
     case 'dead':
@@ -169,15 +208,32 @@ function computePose(f: Fighter): Pose {
   }
 }
 
-// Section 3 (polish pass): the physics ground position (pos.y === groundY
-// when grounded) sits *exactly* on the drawn ground line, but the pose
-// rig's own leg lengths land the feet a couple of units short of that line
-// in several poses (most visibly at the top of the run-cycle bounce) —
-// reading as a faint hover. A fixed extra sink applied only while grounded
-// plants the feet solidly on the line in every pose without touching any
-// pose's numbers individually, and it never applies mid-air, so jumping
-// still lifts cleanly off the ground and lands back on it (section 3).
-const GROUND_EMBED = 8;
+// Section 3 (polish pass, revised): the physics ground position (pos.y ===
+// groundY when grounded) sits *exactly* on the drawn ground line, but the
+// pose rig's own leg lengths land the feet short of (or, for bosses, far
+// short of) that line depending on the fighter's height/scale — a fixed
+// pixel offset here can't work for every fighter size at once (it was tuned
+// against the player's proportions and left tall/scaled-up bosses floating
+// badly). Instead this now derives the exact local Y of the lowest foot
+// from the same hip/leg numbers the pose rig already uses, so any fighter
+// of any height/scale gets its feet planted precisely on the ground line —
+// in every pose (idle, run, attack, hit, ...), since it reads the *current*
+// pose each frame rather than assuming one fixed gap. A small safety
+// margin keeps feet read as solidly planted rather than merely touching.
+// Never applies mid-air, so jumping/falling still lifts and lands cleanly.
+const FOOT_SAFETY_EMBED = 2;
+// Fallen/dead poses go through a separate rotate+translate path below
+// (the rig is drawn "on its side"), where the pose's leg numbers no longer
+// correspond to vertical foot position — a modest scaled constant here
+// keeps that case simple and stable rather than feeding it geometry that
+// no longer means what it means while standing.
+const GROUND_EMBED_FLATTEN = 4;
+
+function lowestFootLocalY(f: Fighter, pose: Pose): number {
+  const hipYLocal = -f.height * 0.45 + pose.hipY;
+  const legReachLocal = Math.max(pose.legFrontY, pose.legBackY, 0);
+  return hipYLocal + legReachLocal;
+}
 
 /** Draws Captain Windel / an enemy / a boss as a minimalist stick figure
  * with an animated cape and layered visual equipment (section 6/21). The
@@ -193,7 +249,11 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   const x = f.body.pos.x;
   const groundY = f.body.groundY;
   const airLift = groundY - f.body.pos.y;
-  const groundEmbed = f.body.grounded ? GROUND_EMBED : 0;
+  const groundEmbed = f.body.grounded
+    ? (pose.flatten > 0.5
+      ? GROUND_EMBED_FLATTEN * scale
+      : (-lowestFootLocalY(f, pose) + FOOT_SAFETY_EMBED) * scale)
+    : 0;
 
   ctx.save();
   ctx.translate(x, groundY - airLift + groundEmbed);
@@ -249,6 +309,9 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
     ctx.restore();
   }
 
+  drawBodyAccessories(ctx, f, shoulderX, shoulderY, hipY);
+  if (f.kind === 'boss') drawBossFlair(ctx, f, shoulderX, shoulderY, hipY, f.animTimeMs / 1000);
+
   // Back arm (behind torso).
   drawArm(ctx, shoulderX, shoulderY, pose.armBackX, pose.armBackY, f, false);
 
@@ -261,24 +324,38 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   drawHeadAccessories(ctx, f, shoulderX + headX, headY, headR);
 
   if (!pose.turnedAway) {
+    // Section (polish pass): a single tiny, low-contrast eye used to read
+    // as "no eyes at all" against most head colors. Bigger white with a
+    // dark outline plus a friendly stroked smile keep the face instantly
+    // readable and clearly comic/humorous rather than realistic.
     ctx.save();
+    const eyeX = 5;
+    const eyeY = -1;
     ctx.fillStyle = '#ffffff';
-    const eyeX = 4;
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 1.3;
     ctx.beginPath();
-    ctx.arc(shoulderX + headX + eyeX, headY - 1, 2.6, 0, Math.PI * 2);
+    ctx.arc(shoulderX + headX + eyeX, headY + eyeY, 4, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = '#111111';
+    ctx.stroke();
+    ctx.fillStyle = '#1a1a1a';
     ctx.beginPath();
-    ctx.arc(shoulderX + headX + eyeX + 1, headY - 1, 1.3, 0, Math.PI * 2);
+    ctx.arc(shoulderX + headX + eyeX + 1.6, headY + eyeY, 1.8, 0, Math.PI * 2);
     ctx.fill();
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.arc(shoulderX + headX + 3, headY + 6, 4.5, 0.15 * Math.PI, 0.85 * Math.PI);
+    ctx.stroke();
     ctx.restore();
   }
 
   // Front arm (in front of torso, holds weapon).
   drawArm(ctx, shoulderX, shoulderY, pose.armFrontX, pose.armFrontY, f, true);
-  drawWeaponInHand(ctx, f, shoulderX + pose.armFrontX, shoulderY + pose.armFrontY);
+  drawWeaponInHand(ctx, f, shoulderX + pose.armFrontX, shoulderY + pose.armFrontY, pose.armFrontX, pose.armFrontY);
 
   drawFeetAccessories(ctx, f, pose, hipY);
+  drawStatusOverlay(ctx, f, shoulderY, hipY);
 
   ctx.restore();
 }
@@ -307,24 +384,183 @@ function drawArm(ctx: CanvasRenderingContext2D, sx: number, sy: number, dx: numb
   ctx.restore();
 }
 
-function drawWeaponInHand(ctx: CanvasRenderingContext2D, f: Fighter, handX: number, handY: number): void {
-  if (f.weaponId === 'fists') return;
+// Section (polish pass): weapons used to render as one undifferentiated
+// line (plus a circle for the frypan) at a fixed angle unrelated to the
+// arm — every weapon looked the same and could visibly clip through the
+// arm whenever the arm pose changed. Each weapon now gets its own
+// recognizable silhouette, drawn rotated to the actual shoulder->hand
+// direction so it always extends naturally out of the hand instead of
+// crossing the arm at an arbitrary angle.
+function drawWeaponInHand(ctx: CanvasRenderingContext2D, f: Fighter, handX: number, handY: number, armDx: number, armDy: number): void {
+  if (f.weaponId === 'fists' || f.weaponId === 'boxingGloves') return;
   const weapon = WEAPONS[f.weaponId];
-  const len = weapon.shape === 'thrust' ? 30 : weapon.shape === 'ranged' ? 18 : 20;
+  const angle = Math.atan2(armDy, armDx);
+
   ctx.save();
-  ctx.strokeStyle = weapon.color;
-  ctx.lineWidth = 6;
+  ctx.translate(handX, handY);
+  ctx.rotate(angle);
   ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(handX, handY);
-  ctx.lineTo(handX + len, handY - 4);
-  ctx.stroke();
-  if (weapon.id === 'frypan') {
-    ctx.fillStyle = weapon.color;
-    ctx.beginPath();
-    ctx.arc(handX + len, handY - 4, 9, 0, Math.PI * 2);
-    ctx.fill();
+  ctx.lineJoin = 'round';
+  // From here on, +x runs along the arm's own direction (out of the hand)
+  // and +y is perpendicular to it — every shape below is defined in that
+  // local frame so it stays glued to the hand and arm angle.
+
+  switch (weapon.id) {
+    case 'sword': {
+      ctx.strokeStyle = '#6d4c2f';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(-6, 0);
+      ctx.lineTo(4, 0);
+      ctx.stroke();
+      ctx.strokeStyle = '#2c2c2c';
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.moveTo(2, -8);
+      ctx.lineTo(2, 8);
+      ctx.stroke();
+      ctx.fillStyle = weapon.color;
+      ctx.beginPath();
+      ctx.moveTo(2, -4.5);
+      ctx.lineTo(38, -2.5);
+      ctx.lineTo(44, 0);
+      ctx.lineTo(38, 2.5);
+      ctx.lineTo(2, 4.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = '#8f9a9c';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(6, 0);
+      ctx.lineTo(40, 0);
+      ctx.stroke();
+      break;
+    }
+    case 'axe': {
+      ctx.strokeStyle = '#6d4c2f';
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.moveTo(-8, 0);
+      ctx.lineTo(26, 0);
+      ctx.stroke();
+      ctx.fillStyle = weapon.color;
+      ctx.beginPath();
+      ctx.moveTo(20, -3);
+      ctx.quadraticCurveTo(36, -20, 22, -22);
+      ctx.quadraticCurveTo(30, -6, 20, 8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = '#4a5556';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      break;
+    }
+    case 'club': {
+      ctx.strokeStyle = weapon.color;
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.moveTo(-6, 0);
+      ctx.lineTo(20, 0);
+      ctx.stroke();
+      ctx.fillStyle = weapon.color;
+      ctx.beginPath();
+      ctx.ellipse(28, 0, 11, 8, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#3a2414';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(28, 0, 5, 0, Math.PI * 2);
+      ctx.stroke();
+      break;
+    }
+    case 'frypan': {
+      ctx.strokeStyle = '#3a3a3a';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(-6, 0);
+      ctx.lineTo(18, 0);
+      ctx.stroke();
+      ctx.fillStyle = weapon.color;
+      ctx.beginPath();
+      ctx.arc(28, 0, 11, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#5a5a5a';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(25, -3, 6, Math.PI * 1.1, Math.PI * 1.7);
+      ctx.stroke();
+      break;
+    }
+    case 'spear': {
+      ctx.strokeStyle = weapon.color;
+      ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      ctx.moveTo(-10, 0);
+      ctx.lineTo(44, 0);
+      ctx.stroke();
+      ctx.fillStyle = weapon.trailColor ?? '#e8d8b0';
+      ctx.beginPath();
+      ctx.moveTo(40, -4);
+      ctx.lineTo(58, 0);
+      ctx.lineTo(40, 4);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = '#8a7350';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      break;
+    }
+    case 'branch': {
+      ctx.strokeStyle = weapon.color;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(-4, 0);
+      ctx.lineTo(28, -2);
+      ctx.stroke();
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(10, -1);
+      ctx.lineTo(16, -8);
+      ctx.moveTo(18, -1.5);
+      ctx.lineTo(23, 5);
+      ctx.stroke();
+      break;
+    }
+    case 'boomerang': {
+      ctx.strokeStyle = weapon.color;
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.arc(10, 10, 16, Math.PI * 1.05, Math.PI * 1.75);
+      ctx.stroke();
+      break;
+    }
+    case 'bow': {
+      ctx.strokeStyle = weapon.color;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(4, 0, 20, Math.PI * 0.62, Math.PI * 1.38);
+      ctx.stroke();
+      ctx.strokeStyle = weapon.trailColor ?? '#f1c40f';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(4 + Math.cos(Math.PI * 0.62) * 20, Math.sin(Math.PI * 0.62) * 20);
+      ctx.lineTo(4 + Math.cos(Math.PI * 1.38) * 20, Math.sin(Math.PI * 1.38) * 20);
+      ctx.stroke();
+      break;
+    }
+    default: {
+      ctx.strokeStyle = weapon.color;
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.moveTo(-4, 0);
+      ctx.lineTo(24, 0);
+      ctx.stroke();
+    }
   }
+
   ctx.restore();
 }
 
@@ -433,5 +669,284 @@ function drawFeetAccessories(ctx: CanvasRenderingContext2D, f: Fighter, pose: Po
     ctx.ellipse(-16, hipY - 20, 8, 16, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
+  }
+}
+
+// Section (polish pass): superpowers already apply their slow/freeze/
+// stun/dot debuffs to `f.status` (unchanged — see GameEngine.fireSuperpower
+// and Fighter.applySlow/applyFreeze/applyStun/applyDot); this only reads
+// that existing state to draw a matching visual cue, so an enemy hit by
+// ice/gas/electro/chili visibly reads as frozen/slowed/stunned/burning for
+// as long as the (already-tuned) effect actually lasts — no new numbers,
+// purely a readability pass on effects that already work.
+function drawStatusOverlay(ctx: CanvasRenderingContext2D, f: Fighter, shoulderY: number, hipY: number): void {
+  const s = f.status;
+  const t = f.animTimeMs / 1000;
+  if (s.frozenUntilMs > 0) {
+    ctx.save();
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = '#b3e5fc';
+    ctx.beginPath();
+    ctx.roundRect(-13, shoulderY - 2, 26, hipY - shoulderY + 44, 8);
+    ctx.fill();
+    ctx.globalAlpha = 0.75;
+    ctx.strokeStyle = '#e1f5fe';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    for (let i = 0; i < 3; i++) {
+      const a = t * 1.6 + i * 2.1;
+      ctx.beginPath();
+      ctx.arc(Math.cos(a) * 9, shoulderY + 8 + i * 14, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  } else if (s.stunnedUntilMs > 0) {
+    ctx.save();
+    ctx.strokeStyle = '#ffd600';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      const a = t * 7 + (i / 3) * Math.PI * 2;
+      const cx = Math.cos(a) * 12;
+      const cy = shoulderY - 24 + Math.sin(a) * 4;
+      ctx.beginPath();
+      ctx.moveTo(cx - 3, cy - 3);
+      ctx.lineTo(cx + 3, cy + 3);
+      ctx.moveTo(cx + 3, cy - 3);
+      ctx.lineTo(cx - 3, cy + 3);
+      ctx.stroke();
+    }
+    ctx.restore();
+  } else if (s.slowUntilMs > 0) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(139,195,74,0.6)';
+    ctx.lineWidth = 1.4;
+    for (let i = 0; i < 2; i++) {
+      const a = t * 1.4 + i * Math.PI;
+      ctx.beginPath();
+      ctx.ellipse(Math.sin(a) * 4, shoulderY - 22 - i * 6, 7, 3.5, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  if (s.dotUntilMs > 0) {
+    ctx.save();
+    ctx.fillStyle = s.dotColor;
+    for (let i = 0; i < 3; i++) {
+      const cycle = (t * 1.6 + i * 0.33) % 1;
+      const fx = -6 + i * 6;
+      const fy = hipY - 6 - cycle * 26;
+      ctx.globalAlpha = 0.55 * (1 - cycle);
+      ctx.beginPath();
+      ctx.arc(fx, fy, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
+function drawBodyAccessories(ctx: CanvasRenderingContext2D, f: Fighter, shoulderX: number, shoulderY: number, hipY: number): void {
+  if (!f.accessories.includes('heavyArmor')) return;
+  ctx.save();
+  ctx.fillStyle = '#5c6b73';
+  ctx.strokeStyle = '#2f3a3e';
+  ctx.lineWidth = 1.3;
+  const plateW = 13;
+  const plateTop = shoulderY + 6;
+  const plateH = (hipY - plateTop) * 0.65;
+  ctx.beginPath();
+  ctx.roundRect(shoulderX - plateW / 2, plateTop, plateW, plateH, 3);
+  ctx.fill();
+  ctx.stroke();
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.ellipse(shoulderX + side * 9, shoulderY + 2, 7, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// Section (polish pass): bosses used to be normal-stickman-shaped enemies
+// with a bigger health bar — same silhouette, same accessories pattern as
+// regular enemies, nothing that read as "this is a unique character."
+// Each boss now gets a small set of extra shapes keyed to its own def id,
+// layered on top of the shared stick-figure rig so every boss keeps one
+// consistent art style while still being instantly distinguishable from
+// both normal enemies and every other boss.
+function drawBossFlair(ctx: CanvasRenderingContext2D, f: Fighter, shoulderX: number, shoulderY: number, hipY: number, t: number): void {
+  switch (f.bossDefId) {
+    case 'clown': {
+      ctx.save();
+      const colors = ['#e53935', '#fdd835', '#1e88e5'];
+      for (let i = -3; i <= 3; i++) {
+        ctx.fillStyle = colors[(i + 9) % colors.length];
+        ctx.beginPath();
+        ctx.arc(shoulderX + i * 4.2, shoulderY + 4, 3.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = '#fdd835';
+      for (let i = 0; i < 3; i++) {
+        ctx.beginPath();
+        ctx.arc(shoulderX + 1, shoulderY + 14 + i * 10, 2.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+      break;
+    }
+    case 'ironTree': {
+      ctx.save();
+      ctx.strokeStyle = '#5d4630';
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 3; i++) {
+        const y = shoulderY + 10 + i * 12;
+        ctx.beginPath();
+        ctx.moveTo(shoulderX - 5, y);
+        ctx.lineTo(shoulderX + 5, y + 4);
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#4caf50';
+      ctx.beginPath();
+      ctx.ellipse(shoulderX + 10, shoulderY - 30, 5, 2.6, 0.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      break;
+    }
+    case 'magmaBrute': {
+      ctx.save();
+      ctx.strokeStyle = '#ff7043';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(shoulderX - 4, shoulderY + 8);
+      ctx.lineTo(shoulderX + 2, shoulderY + 16);
+      ctx.lineTo(shoulderX - 2, shoulderY + 24);
+      ctx.lineTo(shoulderX + 3, shoulderY + 32);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,171,64,0.7)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.restore();
+      break;
+    }
+    case 'frostQueen': {
+      ctx.save();
+      ctx.strokeStyle = '#81d4fa';
+      ctx.lineWidth = 1.6;
+      for (const side of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(shoulderX + side * 7, shoulderY - 2);
+        ctx.lineTo(shoulderX + side * 12, shoulderY - 14);
+        ctx.stroke();
+      }
+      ctx.fillStyle = 'rgba(129,212,250,0.3)';
+      ctx.beginPath();
+      ctx.arc(shoulderX, (shoulderY + hipY) / 2, 22, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      break;
+    }
+    case 'chicken': {
+      ctx.save();
+      ctx.fillStyle = '#eeeeee';
+      ctx.strokeStyle = '#bdbdbd';
+      ctx.lineWidth = 1;
+      for (const side of [-1, 1]) {
+        ctx.beginPath();
+        ctx.ellipse(shoulderX + side * 9, shoulderY + 10, 6, 3, side * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+      break;
+    }
+    case 'stoneKnight': {
+      ctx.save();
+      ctx.strokeStyle = '#78716c';
+      ctx.lineWidth = 1;
+      const top = shoulderY + 4;
+      const bottom = hipY - 4;
+      for (let y = top; y < bottom; y += 7) {
+        ctx.beginPath();
+        ctx.moveTo(shoulderX - 8, y);
+        ctx.lineTo(shoulderX + 8, y);
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.moveTo(shoulderX, top);
+      ctx.lineTo(shoulderX, bottom);
+      ctx.stroke();
+      ctx.restore();
+      break;
+    }
+    case 'graveWraith': {
+      ctx.save();
+      ctx.fillStyle = 'rgba(69,90,100,0.55)';
+      ctx.beginPath();
+      ctx.moveTo(shoulderX - 8, shoulderY + 2);
+      ctx.lineTo(shoulderX + 8, shoulderY + 2);
+      for (let i = 0; i <= 5; i++) {
+        const px = shoulderX + 8 - i * 3.2;
+        const py = hipY + 6 + (i % 2 === 0 ? 6 : 0);
+        ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      break;
+    }
+    case 'stormTitan': {
+      ctx.save();
+      ctx.fillStyle = '#455a64';
+      for (const side of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(shoulderX + side * 6, shoulderY);
+        ctx.lineTo(shoulderX + side * 13, shoulderY - 10);
+        ctx.lineTo(shoulderX + side * 9, shoulderY + 3);
+        ctx.closePath();
+        ctx.fill();
+      }
+      if (Math.sin(t * 6) > 0.6) {
+        ctx.strokeStyle = '#fff59d';
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(shoulderX - 10, shoulderY + 20);
+        ctx.lineTo(shoulderX - 4, shoulderY + 26);
+        ctx.lineTo(shoulderX - 8, shoulderY + 32);
+        ctx.stroke();
+      }
+      ctx.restore();
+      break;
+    }
+    case 'chaosHydra': {
+      ctx.save();
+      ctx.globalAlpha = 0.45 + Math.sin(t * 3) * 0.15;
+      ctx.strokeStyle = '#ce93d8';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(shoulderX, (shoulderY + hipY) / 2, 26, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = f.color;
+      ctx.beginPath();
+      ctx.arc(shoulderX - 14, shoulderY - 8, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      break;
+    }
+    case 'windelNemesis': {
+      ctx.save();
+      ctx.fillStyle = 'rgba(120,20,140,0.5)';
+      ctx.beginPath();
+      ctx.moveTo(shoulderX - 6, shoulderY - 16);
+      ctx.lineTo(shoulderX, shoulderY - 28);
+      ctx.lineTo(shoulderX + 6, shoulderY - 16);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      break;
+    }
+    default:
+      break;
   }
 }

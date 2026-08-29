@@ -9,7 +9,7 @@ export const BOSSES: Record<string, BossDef> = {
   clown: {
     id: 'clown', name: 'Der Clown', isBoss: true, aiType: 'boss',
     baseStats: { maxHealth: 320, meleeDamage: 14, defense: 0.05, moveSpeed: 140, attackSpeed: 0.9, attackControl: 1 },
-    scoreValue: 3000, color: '#2c2c2c', accessories: ['clownNose', 'clownShoes', 'clownHat'],
+    scoreValue: 3000, color: '#2b2140', accessories: ['clownNose', 'clownShoes', 'clownHat'],
     weaponId: 'club', preferredRange: 70, sizeMult: 1.5,
     abilities: [
       { id: 'balloonBarrage', name: 'Ballon-Salve', cooldownMs: 9000, telegraphMs: 700 },
@@ -22,7 +22,7 @@ export const BOSSES: Record<string, BossDef> = {
   ironTree: {
     id: 'ironTree', name: 'Eisen-Baum', isBoss: true, aiType: 'boss',
     baseStats: { maxHealth: 520, meleeDamage: 18, defense: 0.1, moveSpeed: 110, attackSpeed: 0.8, attackControl: 0.95 },
-    scoreValue: 4200, color: '#2c2c2c', accessories: ['heavyArmor'],
+    scoreValue: 4200, color: '#3e2b18', accessories: ['heavyArmor'],
     weaponId: 'axe', preferredRange: 75, sizeMult: 1.6,
     abilities: [
       { id: 'chargeSlam', name: 'Wurzel-Stampfer', cooldownMs: 6500, telegraphMs: 600 },
@@ -35,7 +35,7 @@ export const BOSSES: Record<string, BossDef> = {
   magmaBrute: {
     id: 'magmaBrute', name: 'Magma-Brutalo', isBoss: true, aiType: 'boss',
     baseStats: { maxHealth: 760, meleeDamage: 22, defense: 0.12, moveSpeed: 130, attackSpeed: 0.85, attackControl: 1 },
-    scoreValue: 5400, color: '#2c2c2c', accessories: ['heavyArmor'],
+    scoreValue: 5400, color: '#3a1210', accessories: ['heavyArmor'],
     weaponId: 'club', preferredRange: 70, sizeMult: 1.65,
     abilities: [
       { id: 'chargeSlam', name: 'Lava-Stampfer', cooldownMs: 6000, telegraphMs: 550 },
@@ -48,7 +48,7 @@ export const BOSSES: Record<string, BossDef> = {
   frostQueen: {
     id: 'frostQueen', name: 'Frost-Königin', isBoss: true, aiType: 'boss',
     baseStats: { maxHealth: 1000, meleeDamage: 24, defense: 0.1, moveSpeed: 150, attackSpeed: 1.0, attackControl: 1.05 },
-    scoreValue: 6600, color: '#2c2c2c', accessories: ['wizardHat'],
+    scoreValue: 6600, color: '#1c3a4a', accessories: ['wizardHat'],
     weaponId: 'bow', preferredRange: 300, sizeMult: 1.6,
     abilities: [
       { id: 'summonMinion', name: 'Eis-Diener rufen', cooldownMs: 11000, telegraphMs: 400 },
@@ -74,7 +74,7 @@ export const BOSSES: Record<string, BossDef> = {
   stoneKnight: {
     id: 'stoneKnight', name: 'Stein-Ritter', isBoss: true, aiType: 'boss',
     baseStats: { maxHealth: 1550, meleeDamage: 26, defense: 0.22, moveSpeed: 100, attackSpeed: 0.75, attackControl: 0.9 },
-    scoreValue: 9200, color: '#2c2c2c', accessories: ['shield', 'heavyArmor'],
+    scoreValue: 9200, color: '#4a4238', accessories: ['shield', 'heavyArmor'],
     weaponId: 'sword', preferredRange: 75, sizeMult: 1.7,
     abilities: [
       { id: 'chargeSlam', name: 'Ruinen-Stampfer', cooldownMs: 6000, telegraphMs: 600 },
@@ -100,7 +100,7 @@ export const BOSSES: Record<string, BossDef> = {
   stormTitan: {
     id: 'stormTitan', name: 'Sturm-Titan', isBoss: true, aiType: 'boss',
     baseStats: { maxHealth: 2200, meleeDamage: 30, defense: 0.12, moveSpeed: 160, attackSpeed: 1.0, attackControl: 1 },
-    scoreValue: 12200, color: '#2c2c2c', accessories: ['heavyArmor'],
+    scoreValue: 12200, color: '#232838', accessories: ['heavyArmor'],
     weaponId: 'axe', preferredRange: 80, sizeMult: 1.75,
     abilities: [
       { id: 'chargeSlam', name: 'Donnerschlag', cooldownMs: 6000, telegraphMs: 550 },

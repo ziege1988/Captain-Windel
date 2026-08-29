@@ -28,7 +28,8 @@ export type AnimState =
   | 'fart'
   | 'dead'
   | 'bossIntro'
-  | 'bossDeath';
+  | 'bossDeath'
+  | 'taunt';
 
 /** Base combat stats. All multiplicative modifiers from upgrades/equipment
  * apply on top of these at read-time (see StatModifiers). */

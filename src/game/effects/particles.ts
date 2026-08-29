@@ -56,6 +56,28 @@ export class ParticleSystem {
     }
   }
 
+  // Section (polish pass): burst() above is fully radial/omnidirectional —
+  // fine for generic impacts, but superpowers that are meant to travel
+  // toward the enemy (gas cloud drifting the way the character is oriented,
+  // a flame jet with reach, an ice beam) need particles biased into a cone
+  // around one direction instead of exploding outward evenly. `spreadRad`
+  // is the half-angle of that cone in radians.
+  burstDirectional(pos: Vec2, count: number, angle: number, spreadRad: number, opts: Partial<Particle> = {}): void {
+    for (let i = 0; i < count; i++) {
+      const a = angle + (Math.random() - 0.5) * 2 * spreadRad;
+      const speed = 90 + Math.random() * 160;
+      this.spawn({
+        pos: { x: pos.x, y: pos.y },
+        vel: { x: Math.cos(a) * speed, y: Math.sin(a) * speed },
+        life: 0.35 + Math.random() * 0.3,
+        maxLife: 0.65,
+        size: 4 + Math.random() * 5,
+        gravity: 60,
+        ...opts,
+      });
+    }
+  }
+
   update(dt: number): void {
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i];

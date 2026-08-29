@@ -73,6 +73,14 @@ export class Fighter {
   aggression = 1; // 0..1, chance to actually take an attack opportunity
   recoveryBonusMs = 0; // extra cooldown tacked onto attacks, beyond the weapon's own cadence
 
+  // Boss idle-gesture state (section: boss individuality polish pass). Only
+  // triggered while a boss isn't in attack range, so it never eats into
+  // attack uptime/DPS (see GameEngine.updateEnemyAi) — purely a liveliness
+  // flourish, not a balance change.
+  gestureCooldownMs = 6000 + Math.random() * 6000;
+  tauntActiveMs = 0;
+  tauntVariant = 0;
+
   constructor(id: string, kind: FighterKind, name: string, baseStats: StatBlock, x: number, groundY: number) {
     this.id = id;
     this.kind = kind;
