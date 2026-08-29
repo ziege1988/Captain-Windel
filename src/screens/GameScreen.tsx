@@ -106,6 +106,7 @@ export function GameScreen() {
             cooldowns={hud.superpowerCooldowns}
             weaponName={WEAPONS[hud.weaponId].name}
             hasBanana={engine.player.equippedUpgradeIds.includes('banana_peel')}
+            hasBonusWeapon={hud.hasBonusWeapon}
           />
         </>
       )}

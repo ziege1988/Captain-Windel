@@ -10,11 +10,12 @@ interface Props {
   cooldowns: Record<SuperpowerId, number>;
   weaponName: string;
   hasBanana: boolean;
+  hasBonusWeapon: boolean;
 }
 
 // Section 7/40: large two-thumb touch layout — left thumb for movement,
 // right thumb for combat actions. No control smaller than ~56px.
-export function TouchControls({ engine, equippedSuperpowers, cooldowns, weaponName, hasBanana }: Props) {
+export function TouchControls({ engine, equippedSuperpowers, cooldowns, weaponName, hasBanana, hasBonusWeapon }: Props) {
   const activeDir = useRef<-1 | 0 | 1>(0);
 
   const setDir = (dir: -1 | 0 | 1) => {
@@ -79,6 +80,9 @@ export function TouchControls({ engine, equippedSuperpowers, cooldowns, weaponNa
         <div style={comboRowStyle}>
           {hasBanana && (
             <TouchButton label="🍌" size={50} onDown={() => engine.placeBananaPeel()} />
+          )}
+          {hasBonusWeapon && (
+            <TouchButton label="🎁💣" size={54} onDown={() => engine.throwBonusWeapon()} />
           )}
           <TouchButton label="⇄ WAFFE" size={50} onDown={() => engine.cycleWeapon()} />
         </div>

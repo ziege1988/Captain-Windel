@@ -125,44 +125,55 @@ function computePose(f: Fighter): Pose {
       return { ...STAND, bodyLean: 0.5, hipY: 4, armFrontX: 14, armFrontY: 30, armBackX: 12, armBackY: 32, headOffsetY: 10 };
     case 'superpower':
     case 'fart': {
-      // Section 7 (polish pass): a clear three-beat motion instead of one
-      // continuous ramp — Vorbereitung (turn+start crouching), then a
-      // deliberate deep-crouch "letting it rip" beat, then a short ease
-      // back toward neutral. Timed to land the GameEngine's actual
-      // superpower payload (fired at 0.38s) right in the deep-crouch beat.
-      const prepEnd = 0.15;
-      const mainEnd = 0.42;
-      const totalEnd = 0.68;
+      // Section (quality pass): four clearly readable beats, slower overall
+      // than before so the bend genuinely reads as a body movement rather
+      // than a pose-swap — stand -> brief announce -> a real, visible
+      // forward bend (torso leans, hips crouch low, the character turns so
+      // the rear faces the enemy) -> a short held beat right as the gas/
+      // fire actually releases -> standing back up. Timed so GameEngine's
+      // actual payload (fired at 0.6s, see useSuperpower) lands inside the
+      // held-release beat, not before the bend has actually completed.
+      const announceEnd = 0.18;
+      const bendEnd = 0.5;
+      const releaseEnd = 0.68;
+      const totalEnd = 1.0;
       let turned: number, crouch: number, cape: number, lean: number, armX: number, armY: number;
-      if (t < prepEnd) {
-        const p = t / prepEnd;
-        // Section 7/8/9 (polish pass): a brief announcing flinch (a quick
-        // backward lean) before the body actually bends into position —
-        // "press button -> character performs a matching movement" rather
-        // than snapping straight into the crouch.
-        const windup = Math.sin(p * Math.PI) * 0.12;
-        turned = p * 0.7;
-        crouch = p * 5;
+      if (t < announceEnd) {
+        const p = t / announceEnd;
+        // A brief announcing flinch (quick backward lean) before the body
+        // actually starts bending — "press button -> character performs a
+        // matching movement" rather than snapping straight into the crouch.
+        const flinch = Math.sin(p * Math.PI) * 0.14;
+        turned = p * 0.2;
+        crouch = p * 2;
         cape = 0;
-        lean = p * 0.3 - windup;
-        armX = -16 * p;
-        armY = 26 - 12 * p;
-      } else if (t < mainEnd) {
-        const p = (t - prepEnd) / (mainEnd - prepEnd);
-        turned = 0.7 + p * 0.3;
-        crouch = 5 + p * 9;
-        cape = p;
-        lean = 0.3;
-        armX = -16;
-        armY = 14;
+        lean = p * 0.1 - flinch;
+        armX = -6 * p;
+        armY = 26 - 4 * p;
+      } else if (t < bendEnd) {
+        const p = (t - announceEnd) / (bendEnd - announceEnd);
+        turned = 0.2 + p * 0.8;
+        crouch = 2 + p * 15;
+        cape = p * 0.8;
+        lean = 0.1 + p * 0.35;
+        armX = -6 - p * 12;
+        armY = 22 - p * 10;
+      } else if (t < releaseEnd) {
+        const p = (t - bendEnd) / (releaseEnd - bendEnd);
+        turned = 1;
+        crouch = 17 + Math.sin(p * Math.PI) * 2;
+        cape = 0.8 + p * 0.2;
+        lean = 0.45;
+        armX = -18;
+        armY = 12;
       } else {
-        const p = Math.min(1, (t - mainEnd) / (totalEnd - mainEnd));
-        turned = 1 - p * 0.35;
-        crouch = 14 - p * 9;
-        cape = 1 - p * 0.6;
-        lean = 0.3 - p * 0.3;
-        armX = -16 + p * 16;
-        armY = 14 + p * 12;
+        const p = Math.min(1, (t - releaseEnd) / (totalEnd - releaseEnd));
+        turned = 1 - p * 0.6;
+        crouch = 17 - p * 17;
+        cape = 1 - p * 0.7;
+        lean = 0.45 - p * 0.45;
+        armX = -18 + p * 24;
+        armY = 12 + p * 14;
       }
       return {
         ...STAND, turnedAway: turned, bodyLean: lean, hipY: crouch,
@@ -310,7 +321,6 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   }
 
   drawBodyAccessories(ctx, f, shoulderX, shoulderY, hipY);
-  if (f.kind === 'boss') drawBossFlair(ctx, f, shoulderX, shoulderY, hipY, f.animTimeMs / 1000);
 
   // Back arm (behind torso).
   drawArm(ctx, shoulderX, shoulderY, pose.armBackX, pose.armBackY, f, false);
@@ -322,33 +332,7 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   ctx.fill();
 
   drawHeadAccessories(ctx, f, shoulderX + headX, headY, headR);
-
-  if (!pose.turnedAway) {
-    // Section (polish pass): a single tiny, low-contrast eye used to read
-    // as "no eyes at all" against most head colors. Bigger white with a
-    // dark outline plus a friendly stroked smile keep the face instantly
-    // readable and clearly comic/humorous rather than realistic.
-    ctx.save();
-    const eyeX = 5;
-    const eyeY = -1;
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#1a1a1a';
-    ctx.lineWidth = 1.3;
-    ctx.beginPath();
-    ctx.arc(shoulderX + headX + eyeX, headY + eyeY, 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#1a1a1a';
-    ctx.beginPath();
-    ctx.arc(shoulderX + headX + eyeX + 1.6, headY + eyeY, 1.8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#1a1a1a';
-    ctx.lineWidth = 1.6;
-    ctx.beginPath();
-    ctx.arc(shoulderX + headX + 3, headY + 6, 4.5, 0.15 * Math.PI, 0.85 * Math.PI);
-    ctx.stroke();
-    ctx.restore();
-  }
+  drawFace(ctx, f, shoulderX + headX, headY, headR, pose);
 
   // Front arm (in front of torso, holds weapon).
   drawArm(ctx, shoulderX, shoulderY, pose.armFrontX, pose.armFrontY, f, true);
@@ -391,7 +375,7 @@ function drawArm(ctx: CanvasRenderingContext2D, sx: number, sy: number, dx: numb
 // recognizable silhouette, drawn rotated to the actual shoulder->hand
 // direction so it always extends naturally out of the hand instead of
 // crossing the arm at an arbitrary angle.
-function drawWeaponInHand(ctx: CanvasRenderingContext2D, f: Fighter, handX: number, handY: number, armDx: number, armDy: number): void {
+export function drawWeaponInHand(ctx: CanvasRenderingContext2D, f: Fighter, handX: number, handY: number, armDx: number, armDy: number): void {
   if (f.weaponId === 'fists' || f.weaponId === 'boxingGloves') return;
   const weapon = WEAPONS[f.weaponId];
   const angle = Math.atan2(armDy, armDx);
@@ -495,11 +479,33 @@ function drawWeaponInHand(ctx: CanvasRenderingContext2D, f: Fighter, handX: numb
       break;
     }
     case 'spear': {
+      // Section (quality pass): the spear used to just inherit the same
+      // shallow downward angle as every other weapon (the idle arm's own
+      // resting direction), which for a ~70-unit-long shaft read as a limp
+      // dangle down past the leg rather than something actually held. Only
+      // the thrust (the 'attack' pose, whose arm already swings to a
+      // natural forward-thrust angle) keeps the arm's own direction; at
+      // rest it's carried near-vertical, tip up, the way a spear actually
+      // is — anchored at the same hand position either way, so the grip
+      // never floats free of the hand.
+      ctx.save();
+      if (f.anim !== 'attack') {
+        ctx.rotate(-1.15 - angle);
+      }
       ctx.strokeStyle = weapon.color;
       ctx.lineWidth = 3.5;
       ctx.beginPath();
-      ctx.moveTo(-10, 0);
+      ctx.moveTo(-26, 0);
       ctx.lineTo(44, 0);
+      ctx.stroke();
+      // Hand-grip band: the hand visibly wraps the shaft instead of the
+      // shaft merely passing behind an otherwise-empty hand.
+      ctx.strokeStyle = '#3a2a18';
+      ctx.lineWidth = 6.5;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(-3, 0);
+      ctx.lineTo(6, 0);
       ctx.stroke();
       ctx.fillStyle = weapon.trailColor ?? '#e8d8b0';
       ctx.beginPath();
@@ -511,6 +517,7 @@ function drawWeaponInHand(ctx: CanvasRenderingContext2D, f: Fighter, handX: numb
       ctx.strokeStyle = '#8a7350';
       ctx.lineWidth = 1;
       ctx.stroke();
+      ctx.restore();
       break;
     }
     case 'branch': {
@@ -581,6 +588,62 @@ function drawCape(ctx: CanvasRenderingContext2D, f: Fighter, shoulderY: number, 
   ctx.quadraticCurveTo(-2 - sway, shoulderY + 45, -4, shoulderY + 2);
   ctx.closePath();
   ctx.fill();
+  ctx.restore();
+}
+
+// Section (quality pass): root-cause fix, not another eye bolted on top.
+// The previous code gated drawing on `!pose.turnedAway`, but pose.turnedAway
+// is a smoothed *number* (0..1), not a boolean — after any fart/superpower
+// (the only anim that ever sets it above 0) the pose-smoothing lerp decays
+// it toward 0 asymptotically, so it lingers as a tiny non-zero float for a
+// beat afterwards. `!0.003` is `false`, so the eyes silently stayed hidden
+// for a stretch after every single superpower use. A proper threshold
+// (mid-turn or further) fixes that outright. The head also now gets two
+// eyes — a near one at full size/contrast and a smaller far one peeking
+// past the head silhouette, the classic cartoon-profile way of reading as
+// "two eyes" without pretending the figure is drawn front-on — plus a
+// friendly mouth, so the face reads correctly in every pose except the
+// ones that actually mean to hide it (turning away to fart).
+function drawFace(ctx: CanvasRenderingContext2D, f: Fighter, hx: number, hy: number, r: number, pose: Pose): void {
+  void f;
+  if (pose.turnedAway > 0.5) return;
+  // Fade the face out smoothly right around the turn instead of an abrupt
+  // pop, since turnedAway itself now animates continuously through the
+  // fart wind-up/return beats.
+  const faceAlpha = 1 - Math.max(0, (pose.turnedAway - 0.3) / 0.2);
+  ctx.save();
+  ctx.globalAlpha *= Math.max(0, Math.min(1, faceAlpha));
+
+  // Two genuinely separate eyes (not two overlapping circles that just
+  // blur into one blob at small render scale) — a back eye and a front
+  // eye, spaced clearly apart along the head, both looking the same
+  // direction. Front one is drawn slightly bigger/higher-contrast since
+  // it's closer to camera; back one is still fully sized and legible on
+  // its own, not a token afterthought.
+  const backX = hx - r * 0.05;
+  const frontX = hx + r * 0.55;
+  const eyeY = hy - r * 0.08;
+
+  for (const [ex, radius, pupilR] of [[backX, 3.0, 1.4], [frontX, 3.6, 1.7]] as const) {
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(ex, eyeY, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#1a1a1a';
+    ctx.beginPath();
+    ctx.arc(ex + radius * 0.4, eyeY, pupilR, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Friendly mouth.
+  ctx.strokeStyle = '#1a1a1a';
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.arc(hx + 3, hy + 6, 4.5, 0.15 * Math.PI, 0.85 * Math.PI);
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -768,185 +831,3 @@ function drawBodyAccessories(ctx: CanvasRenderingContext2D, f: Fighter, shoulder
   ctx.restore();
 }
 
-// Section (polish pass): bosses used to be normal-stickman-shaped enemies
-// with a bigger health bar — same silhouette, same accessories pattern as
-// regular enemies, nothing that read as "this is a unique character."
-// Each boss now gets a small set of extra shapes keyed to its own def id,
-// layered on top of the shared stick-figure rig so every boss keeps one
-// consistent art style while still being instantly distinguishable from
-// both normal enemies and every other boss.
-function drawBossFlair(ctx: CanvasRenderingContext2D, f: Fighter, shoulderX: number, shoulderY: number, hipY: number, t: number): void {
-  switch (f.bossDefId) {
-    case 'clown': {
-      ctx.save();
-      const colors = ['#e53935', '#fdd835', '#1e88e5'];
-      for (let i = -3; i <= 3; i++) {
-        ctx.fillStyle = colors[(i + 9) % colors.length];
-        ctx.beginPath();
-        ctx.arc(shoulderX + i * 4.2, shoulderY + 4, 3.6, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.fillStyle = '#fdd835';
-      for (let i = 0; i < 3; i++) {
-        ctx.beginPath();
-        ctx.arc(shoulderX + 1, shoulderY + 14 + i * 10, 2.6, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.restore();
-      break;
-    }
-    case 'ironTree': {
-      ctx.save();
-      ctx.strokeStyle = '#5d4630';
-      ctx.lineWidth = 2;
-      for (let i = 0; i < 3; i++) {
-        const y = shoulderY + 10 + i * 12;
-        ctx.beginPath();
-        ctx.moveTo(shoulderX - 5, y);
-        ctx.lineTo(shoulderX + 5, y + 4);
-        ctx.stroke();
-      }
-      ctx.fillStyle = '#4caf50';
-      ctx.beginPath();
-      ctx.ellipse(shoulderX + 10, shoulderY - 30, 5, 2.6, 0.6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-      break;
-    }
-    case 'magmaBrute': {
-      ctx.save();
-      ctx.strokeStyle = '#ff7043';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(shoulderX - 4, shoulderY + 8);
-      ctx.lineTo(shoulderX + 2, shoulderY + 16);
-      ctx.lineTo(shoulderX - 2, shoulderY + 24);
-      ctx.lineTo(shoulderX + 3, shoulderY + 32);
-      ctx.stroke();
-      ctx.strokeStyle = 'rgba(255,171,64,0.7)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.restore();
-      break;
-    }
-    case 'frostQueen': {
-      ctx.save();
-      ctx.strokeStyle = '#81d4fa';
-      ctx.lineWidth = 1.6;
-      for (const side of [-1, 1]) {
-        ctx.beginPath();
-        ctx.moveTo(shoulderX + side * 7, shoulderY - 2);
-        ctx.lineTo(shoulderX + side * 12, shoulderY - 14);
-        ctx.stroke();
-      }
-      ctx.fillStyle = 'rgba(129,212,250,0.3)';
-      ctx.beginPath();
-      ctx.arc(shoulderX, (shoulderY + hipY) / 2, 22, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-      break;
-    }
-    case 'chicken': {
-      ctx.save();
-      ctx.fillStyle = '#eeeeee';
-      ctx.strokeStyle = '#bdbdbd';
-      ctx.lineWidth = 1;
-      for (const side of [-1, 1]) {
-        ctx.beginPath();
-        ctx.ellipse(shoulderX + side * 9, shoulderY + 10, 6, 3, side * 0.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-      }
-      ctx.restore();
-      break;
-    }
-    case 'stoneKnight': {
-      ctx.save();
-      ctx.strokeStyle = '#78716c';
-      ctx.lineWidth = 1;
-      const top = shoulderY + 4;
-      const bottom = hipY - 4;
-      for (let y = top; y < bottom; y += 7) {
-        ctx.beginPath();
-        ctx.moveTo(shoulderX - 8, y);
-        ctx.lineTo(shoulderX + 8, y);
-        ctx.stroke();
-      }
-      ctx.beginPath();
-      ctx.moveTo(shoulderX, top);
-      ctx.lineTo(shoulderX, bottom);
-      ctx.stroke();
-      ctx.restore();
-      break;
-    }
-    case 'graveWraith': {
-      ctx.save();
-      ctx.fillStyle = 'rgba(69,90,100,0.55)';
-      ctx.beginPath();
-      ctx.moveTo(shoulderX - 8, shoulderY + 2);
-      ctx.lineTo(shoulderX + 8, shoulderY + 2);
-      for (let i = 0; i <= 5; i++) {
-        const px = shoulderX + 8 - i * 3.2;
-        const py = hipY + 6 + (i % 2 === 0 ? 6 : 0);
-        ctx.lineTo(px, py);
-      }
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-      break;
-    }
-    case 'stormTitan': {
-      ctx.save();
-      ctx.fillStyle = '#455a64';
-      for (const side of [-1, 1]) {
-        ctx.beginPath();
-        ctx.moveTo(shoulderX + side * 6, shoulderY);
-        ctx.lineTo(shoulderX + side * 13, shoulderY - 10);
-        ctx.lineTo(shoulderX + side * 9, shoulderY + 3);
-        ctx.closePath();
-        ctx.fill();
-      }
-      if (Math.sin(t * 6) > 0.6) {
-        ctx.strokeStyle = '#fff59d';
-        ctx.lineWidth = 1.4;
-        ctx.beginPath();
-        ctx.moveTo(shoulderX - 10, shoulderY + 20);
-        ctx.lineTo(shoulderX - 4, shoulderY + 26);
-        ctx.lineTo(shoulderX - 8, shoulderY + 32);
-        ctx.stroke();
-      }
-      ctx.restore();
-      break;
-    }
-    case 'chaosHydra': {
-      ctx.save();
-      ctx.globalAlpha = 0.45 + Math.sin(t * 3) * 0.15;
-      ctx.strokeStyle = '#ce93d8';
-      ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      ctx.arc(shoulderX, (shoulderY + hipY) / 2, 26, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = f.color;
-      ctx.beginPath();
-      ctx.arc(shoulderX - 14, shoulderY - 8, 7, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-      break;
-    }
-    case 'windelNemesis': {
-      ctx.save();
-      ctx.fillStyle = 'rgba(120,20,140,0.5)';
-      ctx.beginPath();
-      ctx.moveTo(shoulderX - 6, shoulderY - 16);
-      ctx.lineTo(shoulderX, shoulderY - 28);
-      ctx.lineTo(shoulderX + 6, shoulderY - 16);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-      break;
-    }
-    default:
-      break;
-  }
-}

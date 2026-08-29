@@ -19,17 +19,21 @@ export const BOSSES: Record<string, BossDef> = {
     deathText: 'Der Clown fällt der Länge nach hin und lässt einen letzten Luftballon steigen.',
     arenaId: 'meadowBoss',
   },
+  // Section (boss overhaul): kept the data id "ironTree" so level/arena
+  // wiring elsewhere never has to change, but the boss itself is now a
+  // proper individual character — a wild Viking berserker — not a
+  // stick-figure tree. See renderBoss.ts's BOSS_COSTUMES.ironTree.
   ironTree: {
-    id: 'ironTree', name: 'Eisen-Baum', isBoss: true, aiType: 'boss',
+    id: 'ironTree', name: 'Wilder Wikinger', isBoss: true, aiType: 'boss',
     baseStats: { maxHealth: 520, meleeDamage: 18, defense: 0.1, moveSpeed: 110, attackSpeed: 0.8, attackControl: 0.95 },
     scoreValue: 4200, color: '#3e2b18', accessories: ['heavyArmor'],
     weaponId: 'axe', preferredRange: 75, sizeMult: 1.6,
     abilities: [
-      { id: 'chargeSlam', name: 'Wurzel-Stampfer', cooldownMs: 6500, telegraphMs: 600 },
-      { id: 'summonMinion', name: 'Astlinge rufen', cooldownMs: 12000, telegraphMs: 400 },
+      { id: 'chargeSlam', name: 'Rammbock-Ansturm', cooldownMs: 6500, telegraphMs: 600 },
+      { id: 'summonMinion', name: 'Gefolgsleute rufen', cooldownMs: 12000, telegraphMs: 400 },
     ],
-    introText: 'Der Wald selbst scheint sich gegen dich zu erheben.',
-    deathText: 'Der Eisen-Baum stürzt krachend um.',
+    introText: 'Ein wilder Wikinger stürmt brüllend aus dem Wald hervor.',
+    deathText: 'Der Wikinger sinkt brüllend zu Boden.',
     arenaId: 'forestBoss',
   },
   magmaBrute: {
@@ -40,6 +44,7 @@ export const BOSSES: Record<string, BossDef> = {
     abilities: [
       { id: 'chargeSlam', name: 'Lava-Stampfer', cooldownMs: 6000, telegraphMs: 550 },
       { id: 'eggDrop', name: 'Glutklumpen', cooldownMs: 8000, telegraphMs: 600 },
+      { id: 'fireWave', name: 'Feuerwelle', cooldownMs: 9000, telegraphMs: 650 },
     ],
     introText: 'Die Erde glüht unter seinen Schritten.',
     deathText: 'Der Magma-Brutalo erstarrt und zerbröselt zu Asche.',
@@ -53,6 +58,7 @@ export const BOSSES: Record<string, BossDef> = {
     abilities: [
       { id: 'summonMinion', name: 'Eis-Diener rufen', cooldownMs: 11000, telegraphMs: 400 },
       { id: 'chargeSlam', name: 'Frost-Stoß', cooldownMs: 6500, telegraphMs: 500 },
+      { id: 'frostNova', name: 'Frost-Nova', cooldownMs: 9500, telegraphMs: 650 },
     ],
     introText: 'Die Luft wird eisig kalt.',
     deathText: 'Die Frost-Königin schmilzt langsam dahin.',
@@ -97,8 +103,10 @@ export const BOSSES: Record<string, BossDef> = {
     deathText: 'Der Grab-Geist löst sich in Rauch auf.',
     arenaId: 'graveyardBoss',
   },
+  // Data id "stormTitan" kept for wiring; visually now a lightning-charged
+  // storm robot (see renderBoss.ts).
   stormTitan: {
-    id: 'stormTitan', name: 'Sturm-Titan', isBoss: true, aiType: 'boss',
+    id: 'stormTitan', name: 'Sturm-Roboter', isBoss: true, aiType: 'boss',
     baseStats: { maxHealth: 2200, meleeDamage: 30, defense: 0.12, moveSpeed: 160, attackSpeed: 1.0, attackControl: 1 },
     scoreValue: 12200, color: '#232838', accessories: ['heavyArmor'],
     weaponId: 'axe', preferredRange: 80, sizeMult: 1.75,
@@ -106,21 +114,23 @@ export const BOSSES: Record<string, BossDef> = {
       { id: 'chargeSlam', name: 'Donnerschlag', cooldownMs: 6000, telegraphMs: 550 },
       { id: 'eggDrop', name: 'Blitzeinschlag', cooldownMs: 7500, telegraphMs: 500 },
     ],
-    introText: 'Der Himmel reißt auf.',
-    deathText: 'Der Sturm-Titan wird vom eigenen Blitz getroffen und stürzt.',
+    introText: 'Ein Roboter aus geladenem Sturmmetall erwacht knisternd zum Leben.',
+    deathText: 'Der Sturm-Roboter wird vom eigenen Blitz getroffen und stürzt in sich zusammen.',
     arenaId: 'stormBoss',
   },
+  // Data id "chaosHydra" kept for wiring; visually now a chaotic alien
+  // (see renderBoss.ts).
   chaosHydra: {
-    id: 'chaosHydra', name: 'Chaos-Zwilling', isBoss: true, aiType: 'boss',
+    id: 'chaosHydra', name: 'Chaos-Alien', isBoss: true, aiType: 'boss',
     baseStats: { maxHealth: 2650, meleeDamage: 32, defense: 0.14, moveSpeed: 190, attackSpeed: 1.15, attackControl: 1.05 },
     scoreValue: 14200, color: '#4a148c', accessories: ['wizardHat', 'shield'],
     weaponId: 'sword', preferredRange: 75, sizeMult: 1.8,
     abilities: [
-      { id: 'summonMinion', name: 'Chaos-Klone', cooldownMs: 9500, telegraphMs: 400 },
+      { id: 'summonMinion', name: 'Alien-Klone', cooldownMs: 9500, telegraphMs: 400 },
       { id: 'balloonBarrage', name: 'Chaos-Splitter', cooldownMs: 8000, telegraphMs: 500 },
     ],
-    introText: 'Die Realität selbst beginnt zu flackern.',
-    deathText: 'Der Chaos-Zwilling zerplatzt in bunte Fetzen.',
+    introText: 'Ein Alien aus einer anderen Realität flackert in die Arena.',
+    deathText: 'Das Chaos-Alien zerplatzt in bunte Fetzen.',
     arenaId: 'chaosArenaBoss',
   },
   windelNemesis: {

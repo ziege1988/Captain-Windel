@@ -11,6 +11,10 @@ interface Props {
 export function Hud({ hud, onPause }: Props) {
   const playerPct = clampPct(hud.playerHealth / Math.max(1, hud.playerMaxHealth));
   const enemyPct = clampPct(hud.enemyHealth / Math.max(1, hud.enemyMaxHealth));
+  // Section 9: warn the player clearly once they're genuinely close to a
+  // Game Over, not at any old scratch — the bar turns red and blinks only
+  // below this threshold, staying calm/normal above it.
+  const playerCritical = playerPct > 0 && playerPct < 0.2;
 
   return (
     <div style={{ position: 'absolute', top: 0, left: 0, right: 0, pointerEvents: 'none', padding: '10px 12px' }}>
@@ -18,7 +22,7 @@ export function Hud({ hud, onPause }: Props) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
           <div style={{ flex: 1 }}>
             <div style={nameLabelStyle}>Captain Windel</div>
-            <HealthBar pct={playerPct} color="#4caf50" />
+            <HealthBar pct={playerPct} color="#4caf50" critical={playerCritical} />
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, pointerEvents: 'auto' }}>
@@ -34,6 +38,7 @@ export function Hud({ hud, onPause }: Props) {
             <div style={levelLabelStyle}>
               {hud.chaosMode ? `CHAOS ${hud.level - 50}` : `LEVEL ${hud.level}`}
             </div>
+            <LivesRow remaining={hud.livesRemaining} max={hud.maxLives} />
           </div>
 
           <div style={{ flex: 1, textAlign: 'right' }}>
@@ -59,16 +64,22 @@ export function Hud({ hud, onPause }: Props) {
   );
 }
 
-function HealthBar({ pct, color, reverse, tall }: { pct: number; color: string; reverse?: boolean; tall?: boolean }) {
+function HealthBar({
+  pct, color, reverse, tall, critical,
+}: { pct: number; color: string; reverse?: boolean; tall?: boolean; critical?: boolean }) {
   return (
     <div style={{
       width: '100%', height: tall ? 16 : 12, borderRadius: 8, background: 'rgba(0,0,0,0.45)',
-      border: '1px solid rgba(255,255,255,0.25)', overflow: 'hidden',
+      border: critical ? '1px solid rgba(255,82,82,0.6)' : '1px solid rgba(255,255,255,0.25)', overflow: 'hidden',
     }}
     >
       <div style={{
-        width: `${pct * 100}%`, height: '100%', background: color,
-        transition: 'width 150ms ease-out', marginLeft: reverse ? 'auto' : 0,
+        width: `${pct * 100}%`, height: '100%', background: critical ? '#ff1744' : color,
+        transition: 'width 150ms ease-out, background 200ms ease-out', marginLeft: reverse ? 'auto' : 0,
+        // Section 9: a gentle pulse, not a frantic strobe — slow enough to
+        // read as a calm warning rather than a distracting screen effect,
+        // and it never covers anything beyond the bar itself.
+        animation: critical ? 'hudCriticalBlink 1.1s ease-in-out infinite' : 'none',
       }}
       />
     </div>
@@ -77,6 +88,18 @@ function HealthBar({ pct, color, reverse, tall }: { pct: number; color: string; 
 
 function clampPct(v: number): number {
   return Math.max(0, Math.min(1, v));
+}
+
+function LivesRow({ remaining, max }: { remaining: number; max: number }) {
+  return (
+    <div style={{ display: 'flex', gap: 3 }} title={`${remaining} Versuche übrig`}>
+      {Array.from({ length: max }, (_, i) => (
+        <span key={i} style={{ fontSize: 12, opacity: i < remaining ? 1 : 0.28, filter: i < remaining ? 'none' : 'grayscale(1)' }}>
+          👶
+        </span>
+      ))}
+    </div>
+  );
 }
 
 const nameLabelStyle: CSSProperties = {

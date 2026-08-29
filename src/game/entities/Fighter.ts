@@ -14,7 +14,7 @@ export interface StatusEffects {
   dotColor: string;
 }
 
-function freshStatus(): StatusEffects {
+export function freshStatus(): StatusEffects {
   return { slowMult: 1, slowUntilMs: 0, stunnedUntilMs: 0, frozenUntilMs: 0, dotPerSec: 0, dotUntilMs: 0, dotColor: '#7cb342' };
 }
 
@@ -57,6 +57,10 @@ export class Fighter {
   weaponFlashMs = 0;
   vomitTimerMs = 0;
   bananaCooldownMs = 0;
+  // Section 8 (quality update): one-time throwable bonus weapon granted at
+  // campaign milestones — player-only, consumed on use (see
+  // GameEngine.throwBonusWeapon).
+  hasBonusWeapon = false;
 
   // Enemy/boss-only metadata (unused for the player).
   aiType: string | null = null;

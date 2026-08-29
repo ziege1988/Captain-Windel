@@ -111,10 +111,14 @@ export const BALANCE = {
       { uptoLevel: 8, value: 0.75 },
       { uptoLevel: Infinity, value: 0.9 },
     ],
-    // Also dialled back alongside the health/damage cut above — a boss
-    // that swings less relentlessly reads as challenging rather than
-    // overwhelming.
-    bossAggression: 0.72,
+    // Section (boss AI overhaul, quality update): lowered further — bosses
+    // now lean on their named special abilities (see bossBehavior.ts +
+    // GameEngine.executeBossAbility) as their signature threat instead of
+    // relentless plain punches, so this only governs how often they still
+    // throw an ordinary melee swing between specials. A boss that swings
+    // less relentlessly with fists also reads as a distinct, more
+    // dangerous character rather than "a normal enemy with more HP."
+    bossAggression: 0.35,
     // How long an attack telegraphs (visible windup) before the hit-check
     // resolves. The player's own attacks stay snappy — this only slows
     // down enemy/boss swings so they're readable (section 8).
@@ -137,8 +141,12 @@ export const BALANCE = {
     // Bosses use their own, level-independent recovery floor rather than
     // the normal-enemy curve above — otherwise a late-campaign boss (whose
     // level index falls into the low end of that curve) would end up
-    // attacking almost back-to-back.
-    bossRecoveryBonusMs: 420,
+    // attacking almost back-to-back. Raised further (boss AI overhaul) —
+    // together with the lower bossAggression above, this leaves clearer
+    // idle/movement beats between a boss's plain attacks, so its named
+    // specials (with their own explicit telegraph) read as the moves that
+    // actually define the fight.
+    bossRecoveryBonusMs: 650,
   },
   // Section 1 (item pacing pass): items shouldn't feel mandatory after
   // every single win. Bosses always reward one (they're a real milestone);

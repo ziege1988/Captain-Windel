@@ -1,5 +1,5 @@
 import type { SuperpowerId, WeaponDef, WeaponId } from '../types';
-import { Fighter } from '../entities/Fighter';
+import { Fighter, freshStatus } from '../entities/Fighter';
 import { createBoss, createEnemy, createPlayer } from '../entities/factory';
 import { ENEMIES } from '../../data/enemies';
 import { BOSSES } from '../../data/bosses';
@@ -9,6 +9,7 @@ import { BALANCE, enemyAggression, enemyRecoveryBonusMs, enemyTelegraphMs, ready
 import { WEAPONS } from '../../data/weapons';
 import { SUPERPOWERS } from '../../data/superpowers';
 import type { SaveData } from '../../storage/saveData';
+import { useAppStore } from '../../state/appStore';
 import { decideAiAction } from '../ai/aiTypes';
 import { tickBossAbilities } from '../ai/bossBehavior';
 import { applyKnockback, distance, stepPhysics } from '../physics/physics';
@@ -17,6 +18,7 @@ import { HitStop, ScreenShake } from '../effects/screenEffects';
 import { audio } from '../audio/audioManager';
 import { renderArena, type ArenaLayout } from './renderArena';
 import { renderFighter } from './renderFighter';
+import { renderBoss } from './renderBoss';
 import { applyDefense, resolveHit, scoreForHit } from './combatMath';
 
 export type GamePhase = 'ready' | 'bossIntro' | 'playing' | 'levelWon' | 'gameOver' | 'paused' | 'arenaTransition';
@@ -33,6 +35,9 @@ export interface HudState {
   combo: number;
   level: number;
   chaosMode: boolean;
+  livesRemaining: number;
+  maxLives: number;
+  hasBonusWeapon: boolean;
   weaponId: WeaponId;
   bossIntroText: string;
   levelWonInfo: { score: number; leveledUp: boolean } | null;
@@ -54,7 +59,7 @@ interface Projectile {
 
 interface Hazard {
   id: number;
-  kind: 'egg' | 'balloon' | 'banana';
+  kind: 'egg' | 'balloon' | 'banana' | 'bonusBomb' | 'fireWave' | 'frostNova';
   pos: { x: number; y: number };
   vel: { x: number; y: number };
   timer: number;
@@ -62,6 +67,13 @@ interface Hazard {
   owner: 'player' | 'enemy';
   triggered: boolean;
 }
+
+// Section 8 (quality update): campaign levels that grant the player a
+// one-time throwable bonus weapon — a handful of deliberate milestones,
+// not every level, and never boss levels (so the reward doesn't compete
+// for attention with a boss intro). Persisted per-run in
+// save.bonusWeaponMilestonesClaimed so it's only ever granted once.
+const BONUS_WEAPON_MILESTONE_LEVELS = [8, 22, 38];
 
 // Section 6 (polish pass): a short-lived, floating comic-book-style sound
 // effect ("Faaarrt…") spawned next to a fighter's rear on every fart.
@@ -125,6 +137,13 @@ export class GameEngine {
   bossesDefeated = 0;
   highestCombo = 0;
   chaosMode = false;
+
+  // Section 10 (3-lives quality update): one GameEngine instance = one run,
+  // so this resets to a fresh 3 every time the player starts or continues
+  // from the main menu. Dying with attempts left heals and retries the
+  // current level (see handlePlayerDefeated) instead of ending the run.
+  static readonly MAX_LIVES = 3;
+  livesRemaining = GameEngine.MAX_LIVES;
 
   particles = new ParticleSystem();
   shake = new ScreenShake();
@@ -272,6 +291,17 @@ export class GameEngine {
     this.enemy.attackTelegraphMs = enemyTelegraphMs(index, level.isBoss);
     this.enemy.recoveryBonusMs = enemyRecoveryBonusMs(index, level.isBoss);
 
+    // Section 8 (quality update): a handful of deliberate campaign
+    // milestones grant a one-time throwable bonus weapon — announced right
+    // as the level starts (so the player sees it before they'd need it),
+    // never replacing the normal weapon, persisted so it's only ever
+    // granted once per milestone per run.
+    if (BONUS_WEAPON_MILESTONE_LEVELS.includes(index) && !this.save.bonusWeaponMilestonesClaimed.includes(index)) {
+      this.player.hasBonusWeapon = true;
+      useAppStore.getState().claimBonusWeaponMilestone(index);
+      this.showToast('🎁 BONUS-WAFFE ERHALTEN!', 2000);
+    }
+
     this.levelWonHandled = false;
   }
 
@@ -359,6 +389,39 @@ export class GameEngine {
     });
   }
 
+  // Section 8 (quality update): the one-time milestone reward — a real
+  // thrown weapon, not another button that silently does nothing. A short
+  // wind-up (reusing the 'attack' pose so the throw reads as one motion
+  // with the arm) then an arcing bomb that explodes on hitting the enemy
+  // or after its fuse runs out, dealing a real AoE hit — separate from and
+  // on top of whatever weapon is currently equipped, consumed after one use.
+  throwBonusWeapon(): void {
+    if (this.phase !== 'playing' || !this.player.canAct()) return;
+    if (!this.player.hasBonusWeapon) return;
+    this.player.hasBonusWeapon = false;
+    this.player.setAnim('attack', true);
+    this.player.attackCooldownRemainingMs = 550;
+    this.player.weaponFlashMs = 120;
+    audio.play('weaponSwing');
+    const dir = this.player.facing;
+    const throwX = this.player.body.pos.x;
+    const throwY = this.player.body.groundY - 50;
+    window.setTimeout(() => {
+      if (this.phase !== 'playing' && this.phase !== 'levelWon') return;
+      hazardCounter += 1;
+      this.hazards.push({
+        id: hazardCounter,
+        kind: 'bonusBomb',
+        pos: { x: throwX + dir * 30, y: throwY },
+        vel: { x: dir * 480, y: -300 },
+        timer: 900,
+        radius: 75,
+        owner: 'player',
+        triggered: false,
+      });
+    }, 150);
+  }
+
   useSuperpower(id: SuperpowerId): void {
     if (this.phase !== 'playing') return;
     if (!this.save.unlockedSuperpowers.includes(id)) return;
@@ -366,26 +429,31 @@ export class GameEngine {
     const def = SUPERPOWERS[id];
     this.superpowerCooldowns.set(id, def.cooldownMs);
     this.player.setAnim('fart', true);
-    // Section 7 (polish pass): covers the full prep -> main beat -> return
-    // motion (see the 'fart' pose in renderFighter.ts) so the player isn't
-    // snapped back to idle mid-animation.
-    this.player.hitstunRemainingMs = 700;
+    // Section (quality pass): covers the full announce -> bend -> held-
+    // release -> return motion (see the 'fart' pose in renderFighter.ts,
+    // now a full 1s so the bend is slow enough to actually read) so the
+    // player isn't snapped back to idle mid-animation.
+    this.player.hitstunRemainingMs = 1000;
     audio.play('superpower');
     audio.vibrate([30, 40, 60, 40, 90]);
     this.shake.add(0.5);
 
-    // Fires right in the deep-crouch "letting it rip" beat of the pose.
-    window.setTimeout(() => this.fireSuperpower(id), 380);
+    // Fires right in the held-release beat of the pose (bend completes at
+    // 0.5s, release beat runs to 0.68s).
+    window.setTimeout(() => this.fireSuperpower(id), 600);
   }
 
   private fireSuperpower(id: SuperpowerId): void {
     if (!this.enemy || this.enemy.isDead) return;
     const def = SUPERPOWERS[id];
-    // Section 5 (polish pass): ~35% bigger cloud than before, still a
-    // brief puff rather than a screen-filling effect. towardFacing=true
-    // (section 7/9) so the effect is clearly aimed at the enemy — the
-    // character is oriented at them, not puffing off into empty space.
-    this.triggerFartEffect(this.player, def.color, 1.35, id === 'nuclear' ? 'ring' : 'cloud', true);
+    // Section (quality pass): each power gets its own base shape instead of
+    // every non-nuclear power sharing the same puffy "cloud" blob — chili
+    // specifically must never show a gas cloud, only fire. towardFacing=true
+    // so the effect is clearly aimed at the enemy — the character is
+    // oriented at them, not puffing off into empty space.
+    const baseShape = id === 'nuclear' ? 'ring' : id === 'chili' ? 'drop' : 'cloud';
+    const baseSizeMult = id === 'chili' ? 1.7 : 1.35;
+    this.triggerFartEffect(this.player, def.color, baseSizeMult, baseShape, true);
     const dirAngle = this.player.facing > 0 ? 0 : Math.PI;
     this.fireSuperpowerVisual(
       id,
@@ -644,7 +712,12 @@ export class GameEngine {
       const dist = distance(enemy.body.pos, this.player.body.pos);
       const result = tickBossAbilities(enemy, def.abilities, dtMs, dist);
       if (result.telegraphStarted) {
-        enemy.setAnim('stagger', true);
+        // Section (boss AI overhaul): a dedicated windup pose (arms raised,
+        // pulsing aura — see renderBoss.ts) instead of reusing 'stagger',
+        // which reads as the boss being hurt rather than about to unleash
+        // something — the player needs to instantly tell "this is a threat
+        // window," not confuse it with a punish opportunity.
+        enemy.setAnim('telegraph', true);
         enemy.body.vel.x = 0;
       }
       if (result.fireAbility) {
@@ -744,7 +817,38 @@ export class GameEngine {
         }
         break;
       }
+      case 'fireWave': {
+        // A travelling wall of fire the player must dodge (jump/move away)
+        // — on contact it burns for a few seconds, distinct from a normal
+        // hit. Slow enough, and telegraphed long enough beforehand, to
+        // reliably get out of the way of.
+        hazardCounter += 1;
+        this.hazards.push({
+          id: hazardCounter, kind: 'fireWave',
+          pos: { x: boss.body.pos.x + dir * 50, y: this.layout.groundY - 30 },
+          vel: { x: dir * 250, y: 0 }, timer: 1600, radius: 40, owner: 'enemy', triggered: false,
+        });
+        this.particles.burst({ x: boss.body.pos.x + dir * 50, y: this.layout.groundY - 30 }, 14, { color: '#ff7043', shape: 'drop', size: 9, gravity: -60 });
+        break;
+      }
+      case 'frostNova': {
+        // A short-fused burst centered on the boss — the player has the
+        // telegraph window plus this fuse to move out of range before it
+        // resolves; anyone still caught inside gets briefly slowed.
+        hazardCounter += 1;
+        this.hazards.push({
+          id: hazardCounter, kind: 'frostNova',
+          pos: { x: boss.body.pos.x, y: this.layout.groundY - 40 },
+          vel: { x: 0, y: 0 }, timer: 650, radius: 95, owner: 'enemy', triggered: false,
+        });
+        this.particles.burst({ x: boss.body.pos.x, y: this.layout.groundY - 40 }, 16, { color: '#81d4fa', shape: 'circle', size: 5, gravity: 0 });
+        break;
+      }
     }
+    // Section (boss AI overhaul): a firm recovery beat after any special so
+    // it can't chain straight into a normal punch — the special itself is
+    // the moment, and the player gets a guaranteed breather right after it.
+    boss.attackCooldownRemainingMs = Math.max(boss.attackCooldownRemainingMs, 900);
   }
 
   private resolveAttackHitFrame(attacker: Fighter, defender: Fighter | null): void {
@@ -892,8 +996,24 @@ export class GameEngine {
     this.showToast('SIEG!', 1300);
   }
 
+  // Section 10 (3-lives quality update): a death only ends the run once
+  // every attempt is spent. With attempts left, it's a soft retry — heal
+  // up, reset the current fight, keep the score/level progress already
+  // earned — so the player visibly loses a life and gets right back in,
+  // rather than every death being a full Game Over.
   private handlePlayerDefeated(): void {
-    this.phase = 'gameOver';
+    this.livesRemaining -= 1;
+    if (this.livesRemaining > 0) {
+      const label = this.livesRemaining === 1 ? 'VERSUCH' : 'VERSUCHE';
+      this.showToast(`NOCH ${this.livesRemaining} ${label}!`, 1800);
+      this.player.health = this.player.maxHealth;
+      this.player.isDead = false;
+      this.player.deathPhase = 'none';
+      this.player.status = freshStatus();
+      this.loadLevel(this.levelIndex);
+    } else {
+      this.phase = 'gameOver';
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -952,6 +1072,7 @@ export class GameEngine {
     for (let i = this.hazards.length - 1; i >= 0; i--) {
       const h = this.hazards[i];
       h.timer -= dtSec * 1000;
+      if (h.kind === 'bonusBomb') h.vel.y += BALANCE.physics.gravity * 0.7 * dtSec;
       h.pos.x += h.vel.x * dtSec;
       h.pos.y += h.vel.y * dtSec;
       if (h.kind === 'balloon') {
@@ -969,7 +1090,7 @@ export class GameEngine {
       }
 
       if ((h.kind !== 'banana' && h.timer <= 0) || h.triggered) {
-        if (h.kind === 'egg' && h.timer <= 0 && !h.triggered) {
+        if ((h.kind === 'egg' || h.kind === 'bonusBomb' || h.kind === 'frostNova') && h.timer <= 0 && !h.triggered) {
           this.triggerHazard(h, null);
         }
         this.hazards.splice(i, 1);
@@ -1011,6 +1132,52 @@ export class GameEngine {
         this.addScore(400);
         this.showToast('AUSGERUTSCHT!');
       }
+    } else if (h.kind === 'bonusBomb') {
+      // Section 8 (quality update): a real explosion with a real AoE hit —
+      // a proper payoff for the milestone reward, not a firework that does
+      // nothing. Only ever threatens the enemy (it's the player's own
+      // thrown weapon), with a limited blast radius so it can still miss.
+      this.particles.burst(h.pos, 26, { color: '#ffb300', shape: 'ring', size: 15 });
+      this.particles.burst(h.pos, 18, { color: '#ff7043', shape: 'spark', size: 9 });
+      this.particles.burst(h.pos, 10, { color: '#8d6e63', shape: 'dust', size: 8, gravity: 250 });
+      audio.play('explosion');
+      this.shake.add(0.6);
+      this.hitStop.trigger(120);
+      const target = this.enemy;
+      if (target && !target.isDead && distance(h.pos, target.body.pos) < h.radius) {
+        this.dealDamageTo(target, applyDefense(60, target.stats.defense), false);
+        applyKnockback(target.body, Math.sign(target.body.pos.x - h.pos.x) || this.player.facing, 380, 0.5);
+        target.setAnim('knockback', true);
+        target.hitstunRemainingMs = 600;
+        this.addScore(600);
+        this.showToast('BOOM! VOLLTREFFER!', 1000);
+      } else {
+        this.showToast('BOOM! DANEBEN...', 1000);
+      }
+    } else if (h.kind === 'fireWave') {
+      // A travelling fire hazard — matches the "Feuerwelle" example
+      // explicitly requested for fire-themed bosses. Direct hit + a short
+      // burn, distinct from a normal punch and telegraphed well before it
+      // reaches the player.
+      this.particles.burst(h.pos, 12, { color: '#ff5722', shape: 'drop', size: 8, gravity: -80 });
+      audio.play('hit');
+      if (directTarget) {
+        this.dealDamageTo(directTarget, applyDefense(20, directTarget.stats.defense), false);
+        directTarget.applyDot(5, 2200, '#ff5722');
+        applyKnockback(directTarget.body, directTarget.facing, 140, 0.35);
+      }
+    } else if (h.kind === 'frostNova') {
+      // A short-fused AoE the player must move out of before it resolves —
+      // matches the "verlangsamende Eisfläche" example for ice-themed
+      // bosses. Anyone still inside when it pops takes a hit and is slowed.
+      this.particles.burst(h.pos, 20, { color: '#81d4fa', shape: 'ring', size: 14 });
+      this.particles.burst(h.pos, 14, { color: '#e1f5fe', shape: 'circle', size: 4, gravity: 0 });
+      audio.play('hit');
+      const target = this.player;
+      if (!target.isDead && distance(h.pos, target.body.pos) < h.radius) {
+        this.dealDamageTo(target, applyDefense(16, target.stats.defense), false);
+        target.applySlow(0.5, 1800);
+      }
     }
   }
 
@@ -1036,7 +1203,7 @@ export class GameEngine {
    * happens — whether it's an active superpower or a defeated fighter's
    * last breath. `sizeMult` scales the cloud (superpowers/death-fart use
    * ~1.35x, i.e. the requested +30-40%, on top of the old baseline). */
-  private triggerFartEffect(f: Fighter, color: string, sizeMult = 1, shape: 'cloud' | 'ring' = 'cloud', towardFacing = false): void {
+  private triggerFartEffect(f: Fighter, color: string, sizeMult = 1, shape: 'cloud' | 'ring' | 'drop' = 'cloud', towardFacing = false): void {
     // Section 7 (polish pass): active superpowers aim the effect at the
     // enemy (towardFacing=true — the character is oriented at them, so the
     // cloud/blast originates and drifts on that side), while the death-fart
@@ -1066,17 +1233,23 @@ export class GameEngine {
         });
         break;
       case 'chili': {
-        // Flicker: a few staggered waves along the same direction instead
-        // of one flat burst, so the flame visibly licks/reaches outward
-        // rather than popping in as a single static shape.
-        for (let wave = 0; wave < 3; wave++) {
+        // Section (quality pass): chili is fire, full stop — no gas cloud
+        // anywhere in its effect. A bigger, longer flicker sequence (more
+        // waves, bigger particles, more reach per wave) so it reads as a
+        // real spectacular flame jet rather than a small particle puff, and
+        // an outward-racing core flame so there's a clear leading edge with
+        // actual reach instead of everything spawning at the same spot.
+        for (let wave = 0; wave < 5; wave++) {
           window.setTimeout(() => {
             if (!this.enemy) return;
-            this.particles.burstDirectional({ x: originX, y: originY }, 9, dirAngle, 0.3, {
-              color: wave % 2 === 0 ? '#ff7043' : '#ffca28',
-              shape: 'drop', size: 9 - wave, life: 0.32, maxLife: 0.32, gravity: -70,
+            const reach = wave * 14;
+            const wx = originX + Math.cos(dirAngle) * reach;
+            const wy = originY + Math.sin(dirAngle) * reach;
+            this.particles.burstDirectional({ x: wx, y: wy }, 11, dirAngle, 0.32, {
+              color: wave % 2 === 0 ? '#ff5722' : '#ffc107',
+              shape: 'drop', size: 12 - wave, life: 0.38, maxLife: 0.38, gravity: -90,
             });
-          }, wave * 70);
+          }, wave * 60);
         }
         break;
       }
@@ -1165,7 +1338,7 @@ export class GameEngine {
 
     const fighters = [this.player, this.enemy].filter((f): f is Fighter => !!f);
     fighters.sort((a, b) => a.body.pos.y - b.body.pos.y);
-    for (const f of fighters) renderFighter(ctx, f, dtSec);
+    for (const f of fighters) (f.kind === 'boss' ? renderBoss : renderFighter)(ctx, f, dtSec);
 
     this.particles.render(ctx);
     this.renderComicTexts(ctx);
@@ -1233,6 +1406,51 @@ export class GameEngine {
       ctx.beginPath();
       ctx.ellipse(0, 0, 16, 6, 0.3, 0, Math.PI * 2);
       ctx.fill();
+    } else if (h.kind === 'bonusBomb') {
+      // A round cartoon bomb, tumbling in flight, with a lit sparking fuse
+      // — instantly readable as "explosive," matching the reward's own
+      // toast/flavor ("🎁 BONUS-WAFFE").
+      ctx.rotate(h.pos.x * 0.05);
+      ctx.fillStyle = '#212121';
+      ctx.beginPath();
+      ctx.arc(0, 0, 13, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#6d4c2f';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(6, -12);
+      ctx.quadraticCurveTo(14, -18, 10, -24);
+      ctx.stroke();
+      const spark = 0.6 + Math.sin(performance.now() / 40) * 0.4;
+      ctx.fillStyle = `rgba(255,${Math.round(160 + spark * 60)},60,${0.7 + spark * 0.3})`;
+      ctx.beginPath();
+      ctx.arc(10, -24, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (h.kind === 'fireWave') {
+      // A rolling wall of flame — several overlapping flickering flame
+      // blobs so it reads as a wave, not a single fireball.
+      const flicker = performance.now() / 70;
+      for (let i = -1; i <= 1; i++) {
+        const wob = Math.sin(flicker + i * 2) * 4;
+        ctx.fillStyle = i === 0 ? '#ffca28' : '#ff5722';
+        ctx.beginPath();
+        ctx.ellipse(i * 16, -10 + wob * 0.4, 18, 26 + wob, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (h.kind === 'frostNova') {
+      // Expanding icy ring — grows visibly as its fuse burns down so the
+      // player can see exactly how much time/space they have to escape it.
+      const growT = 1 - Math.max(0, h.timer / 650);
+      const r = h.radius * (0.25 + growT * 0.85);
+      ctx.strokeStyle = 'rgba(129,212,250,0.8)';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(179,229,252,0.18)';
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fill();
     }
     ctx.restore();
   }
@@ -1263,6 +1481,9 @@ export class GameEngine {
       combo: this.combo,
       level: this.levelIndex,
       chaosMode: this.chaosMode,
+      livesRemaining: this.livesRemaining,
+      maxLives: GameEngine.MAX_LIVES,
+      hasBonusWeapon: this.player.hasBonusWeapon,
       weaponId: this.player.weaponId,
       bossIntroText: this.bossDefId ? BOSSES[this.bossDefId].introText : '',
       levelWonInfo: this.phase === 'levelWon' ? { score: this.score, leveledUp: true } : null,

@@ -13,6 +13,11 @@ export interface SaveData {
   unlockedSuperpowers: SuperpowerId[];
   equippedSuperpowerSlots: (SuperpowerId | null)[];
   longestChaosRun: number;
+  // Section 10 (3-lives quality update): which bonus-throwable-weapon
+  // milestone levels have already been granted this run, so re-entering a
+  // level doesn't re-grant it. Reset alongside the rest of a run's
+  // progress on a full Game Over (see appStore.finishRun).
+  bonusWeaponMilestonesClaimed: number[];
   settings: {
     soundOn: boolean;
     musicOn: boolean;
@@ -33,6 +38,7 @@ export function defaultSaveData(): SaveData {
     unlockedSuperpowers: [],
     equippedSuperpowerSlots: [null, null, null],
     longestChaosRun: 0,
+    bonusWeaponMilestonesClaimed: [],
     settings: {
       soundOn: true,
       musicOn: true,

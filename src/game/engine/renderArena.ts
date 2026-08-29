@@ -192,29 +192,76 @@ function drawPaletteEffects(ctx: CanvasRenderingContext2D, arena: ArenaDef, layo
   }
 }
 
-// Grass/meadow requirement (section 4): every tuft sways with its own
-// phase/speed (derived from a per-tuft hash, not from its index directly)
-// so the field doesn't move as one uniform block, movement stays slow and
-// subtle, and it briefly intensifies during periodic gusts.
+// Grass/meadow requirement (section 11 quality update): a real, dense,
+// continuous meadow covering the *entire* ground area rather than a
+// sparse handful of tufts confined to a thin band near the horizon line —
+// several density layers spread across the full ground height, each blade
+// swaying with its own phase/speed (derived from a per-blade hash, not its
+// index directly) so the field never moves as one uniform block, movement
+// stays slow and subtle, and it briefly intensifies during periodic gusts.
+// A few drifting petals/leaves ride the same wind on top for extra life.
 function drawSwayingGrass(ctx: CanvasRenderingContext2D, arena: ArenaDef, layout: ArenaLayout, timeSec: number): void {
   const { width, groundY, height } = layout;
   const gust = Math.max(0, Math.sin(timeSec * 0.12)) ** 5; // rare, brief, gentle gust
-  const color = arena.isDark ? 'rgba(140,180,120,0.35)' : 'rgba(30,70,25,0.4)';
-  const count = 24;
+  const groundSpan = Math.max(1, height - groundY);
+
+  // Back layer: shorter, denser, slightly darker/duller blades filling the
+  // whole ground depth — the "continuous field" base.
+  drawGrassLayer(ctx, width, groundY, groundSpan, timeSec, gust, {
+    seedOffset: 0, count: 70, minH: 6, maxH: 11, minAmp: 1.4, maxAmp: 2.6,
+    color: arena.isDark ? 'rgba(120,160,110,0.28)' : 'rgba(24,60,20,0.32)', lineWidth: 1.3,
+  });
+  // Front layer: taller, bolder blades, biased toward the near half of the
+  // ground so the field reads with some depth instead of flat wallpaper.
+  drawGrassLayer(ctx, width, groundY, groundSpan, timeSec, gust, {
+    seedOffset: 5000, count: 46, minH: 11, maxH: 19, minAmp: 2.4, maxAmp: 4.2,
+    color: arena.isDark ? 'rgba(150,195,130,0.4)' : 'rgba(32,80,26,0.48)', lineWidth: 1.8,
+    biasNear: true,
+  });
+
+  // A handful of small petals/leaves drifting on the same wind.
+  if (!arena.isDark) {
+    ctx.save();
+    ctx.fillStyle = arena.accentColor;
+    for (let i = 0; i < 6; i++) {
+      const h1 = hash01(i + 20000);
+      const h2 = hash01(i + 21000);
+      const driftSpeed = 10 + h2 * 14 + gust * 20;
+      const x = ((timeSec * driftSpeed + h1 * (width + 80)) % (width + 80)) - 40;
+      const y = groundY + 6 + h2 * Math.min(50, groundSpan - 10) + Math.sin(timeSec * 1.4 + h1 * 8) * 4;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(timeSec * (0.8 + h2) + h1 * 6);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 3.2, 1.6, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+}
+
+function drawGrassLayer(
+  ctx: CanvasRenderingContext2D, width: number, groundY: number, groundSpan: number, timeSec: number, gust: number,
+  opts: { seedOffset: number; count: number; minH: number; maxH: number; minAmp: number; maxAmp: number; color: string; lineWidth: number; biasNear?: boolean },
+): void {
   ctx.save();
-  ctx.strokeStyle = color;
+  ctx.strokeStyle = opts.color;
+  ctx.lineWidth = opts.lineWidth;
   ctx.lineCap = 'round';
-  for (let i = 0; i < count; i++) {
-    const h1 = hash01(i);
-    const h2 = hash01(i + 97);
+  const depthSpan = Math.min(groundSpan - 4, groundSpan * 0.85);
+  for (let i = 0; i < opts.count; i++) {
+    const h1 = hash01(i + opts.seedOffset);
+    const h2 = hash01(i + opts.seedOffset + 1);
+    const h3 = hash01(i + opts.seedOffset + 2);
     const gx = h1 * width;
-    const gy = groundY + 10 + h2 * Math.min(60, height - groundY - 20);
-    const speed = 0.7 + h2 * 0.6;
+    const depthT = opts.biasNear ? Math.sqrt(h2) : h2;
+    const gy = groundY + 4 + depthT * depthSpan;
+    const speed = 0.65 + h3 * 0.7;
     const phase = h1 * Math.PI * 2;
-    const amp = 2.2 + h2 * 1.6 + gust * 3.5;
+    const amp = opts.minAmp + h3 * (opts.maxAmp - opts.minAmp) + gust * (opts.maxAmp - opts.minAmp) * 1.3;
     const sway = Math.sin(timeSec * speed + phase) * amp;
-    const bladeH = 9 + h1 * 6;
-    ctx.lineWidth = 1.6;
+    const bladeH = opts.minH + h1 * (opts.maxH - opts.minH);
     ctx.beginPath();
     ctx.moveTo(gx, gy);
     ctx.quadraticCurveTo(gx + sway * 0.55, gy - bladeH * 0.6, gx + sway, gy - bladeH);

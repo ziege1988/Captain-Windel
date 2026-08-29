@@ -29,7 +29,8 @@ export type AnimState =
   | 'dead'
   | 'bossIntro'
   | 'bossDeath'
-  | 'taunt';
+  | 'taunt'
+  | 'telegraph';
 
 /** Base combat stats. All multiplicative modifiers from upgrades/equipment
  * apply on top of these at read-time (see StatModifiers). */
@@ -190,7 +191,7 @@ export interface EnemyDef {
 // Bosses
 // ---------------------------------------------------------------------------
 
-export type BossAbilityId = 'balloonBarrage' | 'eggDrop' | 'chargeSlam' | 'summonMinion';
+export type BossAbilityId = 'balloonBarrage' | 'eggDrop' | 'chargeSlam' | 'summonMinion' | 'fireWave' | 'frostNova';
 
 export interface BossAbilityDef {
   id: BossAbilityId;
