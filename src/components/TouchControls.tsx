@@ -1,7 +1,8 @@
 import { useRef, type CSSProperties } from 'react';
 import type { GameEngine } from '../game/engine/GameEngine';
-import type { SuperpowerId } from '../game/types';
+import type { SpecialWeaponId, SuperpowerId } from '../game/types';
 import { SUPERPOWERS } from '../data/superpowers';
+import { SPECIAL_WEAPONS } from '../data/specialWeapons';
 import { audio } from '../game/audio/audioManager';
 
 interface Props {
@@ -14,13 +15,14 @@ interface Props {
   airSupportUnlocked: boolean;
   airSupportCooldownMs: number;
   hasStorkBonusWeapon: boolean;
+  specialWeaponId: SpecialWeaponId | null;
 }
 
 // Section 7/40: large two-thumb touch layout — left thumb for movement,
 // right thumb for combat actions. No control smaller than ~56px.
 export function TouchControls({
   engine, equippedSuperpowers, cooldowns, weaponName, hasBanana, hasBonusWeapon,
-  airSupportUnlocked, airSupportCooldownMs, hasStorkBonusWeapon,
+  airSupportUnlocked, airSupportCooldownMs, hasStorkBonusWeapon, specialWeaponId,
 }: Props) {
   const activeDir = useRef<-1 | 0 | 1>(0);
 
@@ -102,8 +104,51 @@ export function TouchControls({
           )}
           <TouchButton label="⇄ WAFFE" size={50} onDown={() => engine.cycleWeapon()} />
         </div>
+        <SpecialWeaponButton specialWeaponId={specialWeaponId} onUse={() => engine.useSpecialWeapon()} />
       </div>
     </div>
+  );
+}
+
+// Persistent-progression pass (brief section 5/18): a dedicated, clearly
+// distinguishable button for the player's single shop-bought special
+// weapon — its own icon and a pulsing gold glow when loaded, a plainly
+// disabled "LEER" state once used/empty, never confusable with the normal
+// attack/kick buttons above it.
+function SpecialWeaponButton({ specialWeaponId, onUse }: { specialWeaponId: SpecialWeaponId | null; onUse: () => void }) {
+  const loaded = !!specialWeaponId;
+  const def = specialWeaponId ? SPECIAL_WEAPONS[specialWeaponId] : null;
+  return (
+    <button
+      onPointerDown={(e) => {
+        e.preventDefault();
+        audio.unlock();
+        if (loaded) onUse();
+      }}
+      onContextMenu={(e) => e.preventDefault()}
+      disabled={!loaded}
+      title={loaded ? `${def!.name} einsetzen` : 'Keine Sonderwaffe'}
+      style={{
+        width: 168, minHeight: 50, borderRadius: 14, marginTop: 2,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+        background: loaded ? 'linear-gradient(180deg,#ff8f00,#e65100)' : 'rgba(20,24,18,0.55)',
+        color: loaded ? '#fff8e1' : 'rgba(255,255,255,0.5)',
+        border: loaded ? '2px solid #ffd54f' : '2px solid rgba(255,255,255,0.15)',
+        boxShadow: loaded ? '0 0 14px rgba(255,193,7,0.7)' : 'none',
+        animation: loaded ? 'specialWeaponPulse 1.3s ease-in-out infinite' : 'none',
+        fontWeight: 800, fontSize: 12, touchAction: 'none', whiteSpace: 'nowrap',
+        opacity: loaded ? 1 : 0.55,
+      }}
+    >
+      {loaded ? (
+        <>
+          <span style={{ fontSize: 18 }}>{def!.icon}</span>
+          <span>💥 SONDERWAFFE</span>
+        </>
+      ) : (
+        <span>Keine Sonderwaffe</span>
+      )}
+    </button>
   );
 }
 

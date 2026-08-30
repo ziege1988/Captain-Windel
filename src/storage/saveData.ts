@@ -1,4 +1,4 @@
-import type { SuperpowerId, WeaponId } from '../game/types';
+import type { SpecialWeaponId, SuperpowerId, WeaponId } from '../game/types';
 import { storageGet, storageSet } from './storage';
 
 const SAVE_KEY = 'captainWindel.save.v1';
@@ -23,6 +23,15 @@ export interface SaveData {
   // milestone list, independent of the bonus-bomb one above. Also reset on
   // a full Game Over.
   storkBonusMilestonesClaimed: number[];
+  // Persistent-progression pass: coins and shop unlocks survive Game Over
+  // (only shop purchases ever spend coins — see appStore.finishRun, which
+  // deliberately does NOT touch either of these two fields). pendingSpecialWeapon
+  // is the one exception that's saved-but-temporary: a weapon bought from the
+  // main-menu shop before a run exists yet, consumed into the player's single
+  // held slot the moment the next GameEngine starts (see its constructor).
+  coins: number;
+  unlockedSpecialWeapons: SpecialWeaponId[];
+  pendingSpecialWeapon: SpecialWeaponId | null;
   settings: {
     soundOn: boolean;
     musicOn: boolean;
@@ -45,6 +54,9 @@ export function defaultSaveData(): SaveData {
     longestChaosRun: 0,
     bonusWeaponMilestonesClaimed: [],
     storkBonusMilestonesClaimed: [],
+    coins: 0,
+    unlockedSpecialWeapons: [],
+    pendingSpecialWeapon: null,
     settings: {
       soundOn: true,
       musicOn: true,

@@ -18,6 +18,7 @@ export const BOSSES: Record<string, BossDef> = {
     introText: 'Der Clown betritt die Arena... irgendwas stimmt nicht mit ihm.',
     deathText: 'Der Clown fällt der Länge nach hin und lässt einen letzten Luftballon steigen.',
     arenaId: 'meadowBoss',
+    coinReward: 40,
   },
   // Section (boss overhaul): kept the data id "ironTree" so level/arena
   // wiring elsewhere never has to change, but the boss itself is now a
@@ -35,6 +36,7 @@ export const BOSSES: Record<string, BossDef> = {
     introText: 'Ein wilder Wikinger stürmt brüllend aus dem Wald hervor.',
     deathText: 'Der Wikinger sinkt brüllend zu Boden.',
     arenaId: 'forestBoss',
+    coinReward: 55,
   },
   magmaBrute: {
     id: 'magmaBrute', name: 'Magma-Brutalo', isBoss: true, aiType: 'boss',
@@ -49,6 +51,7 @@ export const BOSSES: Record<string, BossDef> = {
     introText: 'Die Erde glüht unter seinen Schritten.',
     deathText: 'Der Magma-Brutalo erstarrt und zerbröselt zu Asche.',
     arenaId: 'volcanoBoss',
+    coinReward: 70,
   },
   frostQueen: {
     id: 'frostQueen', name: 'Frost-Königin', isBoss: true, aiType: 'boss',
@@ -63,6 +66,7 @@ export const BOSSES: Record<string, BossDef> = {
     introText: 'Die Luft wird eisig kalt.',
     deathText: 'Die Frost-Königin schmilzt langsam dahin.',
     arenaId: 'iceBoss',
+    coinReward: 85,
   },
   chicken: {
     id: 'chicken', name: 'Killer-Huhn', isBoss: true, aiType: 'boss',
@@ -76,6 +80,8 @@ export const BOSSES: Record<string, BossDef> = {
     introText: 'BGAWK! Ein völlig durchgeknalltes Riesenhuhn stürmt herein.',
     deathText: 'Das Killer-Huhn taumelt, legt ein letztes Ei und plumpst um.',
     arenaId: 'desertBoss',
+    coinReward: 100,
+    dropsHeart: true,
   },
   stoneKnight: {
     id: 'stoneKnight', name: 'Stein-Ritter', isBoss: true, aiType: 'boss',
@@ -89,6 +95,7 @@ export const BOSSES: Record<string, BossDef> = {
     introText: 'Die Ruine erwacht zu unheilvollem Leben.',
     deathText: 'Der Stein-Ritter zerfällt zu einem Steinhaufen.',
     arenaId: 'ruinsBoss',
+    coinReward: 115,
   },
   graveWraith: {
     id: 'graveWraith', name: 'Grab-Geist', isBoss: true, aiType: 'boss',
@@ -102,6 +109,8 @@ export const BOSSES: Record<string, BossDef> = {
     introText: 'Nebel steigt aus den Gräbern auf.',
     deathText: 'Der Grab-Geist löst sich in Rauch auf.',
     arenaId: 'graveyardBoss',
+    coinReward: 130,
+    dropsHeart: true,
   },
   // Data id "stormTitan" kept for wiring; visually now a lightning-charged
   // storm robot (see renderBoss.ts).
@@ -117,6 +126,7 @@ export const BOSSES: Record<string, BossDef> = {
     introText: 'Ein Roboter aus geladenem Sturmmetall erwacht knisternd zum Leben.',
     deathText: 'Der Sturm-Roboter wird vom eigenen Blitz getroffen und stürzt in sich zusammen.',
     arenaId: 'stormBoss',
+    coinReward: 145,
   },
   // Data id "chaosHydra" kept for wiring; visually now a chaotic alien
   // (see renderBoss.ts).
@@ -132,6 +142,8 @@ export const BOSSES: Record<string, BossDef> = {
     introText: 'Ein Alien aus einer anderen Realität flackert in die Arena.',
     deathText: 'Das Chaos-Alien zerplatzt in bunte Fetzen.',
     arenaId: 'chaosArenaBoss',
+    coinReward: 160,
+    dropsHeart: true,
   },
   windelNemesis: {
     id: 'windelNemesis', name: 'Captain Shadow', isBoss: true, aiType: 'boss',
@@ -146,6 +158,8 @@ export const BOSSES: Record<string, BossDef> = {
     introText: 'Ein dunkles Spiegelbild von Captain Windel selbst tritt aus dem Schatten.',
     deathText: 'Captain Shadow zerfällt in Rauch und Windeln fliegen durch die Luft.',
     arenaId: 'finalDarkBoss',
+    coinReward: 200,
+    dropsHeart: true,
   },
 };
 

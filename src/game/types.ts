@@ -209,6 +209,35 @@ export interface BossDef extends Omit<EnemyDef, 'isBoss'> {
   introText: string;
   deathText: string;
   arenaId: string;
+  // Persistent-progression pass: coins scattered on defeat (see
+  // GameEngine.spawnBossRewards) — scales with the boss's own difficulty.
+  // Not every boss also drops a heart, so a heart bonus stays a genuine
+  // surprise rather than a routine expectation.
+  coinReward: number;
+  dropsHeart?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Special weapons (persistent-progression pass)
+// ---------------------------------------------------------------------------
+
+// One-time-use, shop-bought extras — deliberately separate from the
+// permanently-equipped WeaponId/SuperpowerId systems above. Unlocked
+// (made purchasable) by campaign-level milestones, bought with persistent
+// coins, held as at most one at a time, consumed on use.
+export type SpecialWeaponId =
+  | 'chickenAttack' | 'poopCatapult' | 'bigBoomerang' | 'beeSwarm' | 'explodingDuck'
+  | 'raven' | 'eggBomber' | 'iceCannon' | 'tornadoStrike' | 'laser';
+
+export type SpecialWeaponCategory = 'offensive' | 'defensive' | 'support' | 'distraction' | 'aoe';
+
+export interface SpecialWeaponDef {
+  id: SpecialWeaponId;
+  name: string;
+  icon: string;
+  tagline: string; // humorous shop description
+  price: number;
+  category: SpecialWeaponCategory;
 }
 
 // ---------------------------------------------------------------------------

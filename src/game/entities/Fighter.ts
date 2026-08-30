@@ -1,4 +1,4 @@
-import type { AnimState, FacingDirection, StatBlock, StatModifiers, WeaponId } from '../types';
+import type { AnimState, FacingDirection, SpecialWeaponId, StatBlock, StatModifiers, WeaponId } from '../types';
 import { applyModifiers, defaultModifiers } from '../types';
 import { createBody, type PhysicsBody } from '../physics/physics';
 
@@ -68,6 +68,11 @@ export class Fighter {
   dazedUntilMs = 0;
   // One-time bonus weapon: stork drops a diaper bomb on a chosen target.
   hasStorkBonusWeapon = false;
+  // Persistent-progression pass: the single held shop-bought special
+  // weapon slot (player-only) — bought with permanent coins, run-scoped
+  // (lost, unspent, on Game Over), consumed the instant it's used. See
+  // GameEngine.useSpecialWeapon.
+  hasSpecialWeaponId: SpecialWeaponId | null = null;
 
   // Enemy/boss-only metadata (unused for the player).
   aiType: string | null = null;

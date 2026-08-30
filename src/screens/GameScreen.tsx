@@ -7,11 +7,12 @@ import { PauseOverlay } from '../components/PauseOverlay';
 import { UpgradeOverlay } from '../components/UpgradeOverlay';
 import { CampaignCompleteOverlay } from '../components/CampaignCompleteOverlay';
 import { TutorialOverlay } from '../components/TutorialOverlay';
+import { ShopOverlay } from '../components/ShopOverlay';
 import { WEAPONS } from '../data/weapons';
 import { BALANCE, shouldOfferUpgrade } from '../data/balance';
 import { audio } from '../game/audio/audioManager';
 
-type Stage = 'tutorial' | 'playing' | 'paused' | 'campaignComplete' | 'upgrade';
+type Stage = 'tutorial' | 'playing' | 'paused' | 'campaignComplete' | 'upgrade' | 'shop';
 
 export function GameScreen() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -27,6 +28,12 @@ export function GameScreen() {
   const [stage, setStage] = useState<Stage>(save.tutorialSeen ? 'playing' : 'tutorial');
   const wasLevelWon = useRef(false);
   const autoAdvanceTimeout = useRef<number | null>(null);
+  // Persistent-progression pass: where to go once the shop overlay closes —
+  // back to the pause menu it was opened from, or onward through the normal
+  // post-victory flow (upgrade screen / next level) when it was auto-offered
+  // right after a boss kill.
+  const shopFromPause = useRef(false);
+  const afterShopStage = useRef<'upgrade' | null>(null);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -43,14 +50,29 @@ export function GameScreen() {
         recordKill(engine.isBossLevel ? (engine.bossDefId ?? undefined) : undefined);
         if (finalBoss) {
           setStage('campaignComplete');
-        } else if (shouldOfferUpgrade(engine.levelIndex, engine.isBossLevel)) {
-          setStage('upgrade');
         } else {
-          // Not every win needs a new item — briefly acknowledge the
-          // victory (see the engine's "SIEG!" toast) and continue on.
-          autoAdvanceTimeout.current = window.setTimeout(() => {
-            if (engine.phase === 'levelWon') engine.proceedToNextLevel();
-          }, 1300);
+          const nextStage: 'upgrade' | null = shouldOfferUpgrade(engine.levelIndex, engine.isBossLevel) ? 'upgrade' : null;
+          // Persistent-progression pass (brief section 3/16): "möglicherweise
+          // automatisch nach einem Boss angeboten" — after a boss kill, if
+          // the player has coins to spend and an empty special-weapon slot,
+          // offer the shop right away (still fully skippable via "Weiter",
+          // so it never forces a purchase or blocks progress).
+          const offerShop = engine.isBossLevel
+            && !engine.player.hasSpecialWeaponId
+            && useAppStore.getState().save.unlockedSpecialWeapons.length > 0;
+          if (offerShop) {
+            shopFromPause.current = false;
+            afterShopStage.current = nextStage;
+            setStage('shop');
+          } else if (nextStage) {
+            setStage(nextStage);
+          } else {
+            // Not every win needs a new item — briefly acknowledge the
+            // victory (see the engine's "SIEG!" toast) and continue on.
+            autoAdvanceTimeout.current = window.setTimeout(() => {
+              if (engine.phase === 'levelWon') engine.proceedToNextLevel();
+            }, 1300);
+          }
         }
       }
       if (h.phase === 'gameOver' && h.gameOverSummary) {
@@ -110,6 +132,7 @@ export function GameScreen() {
             airSupportUnlocked={hud.airSupportUnlocked}
             airSupportCooldownMs={hud.airSupportCooldownMs}
             hasStorkBonusWeapon={hud.hasStorkBonusWeapon}
+            specialWeaponId={hud.specialWeaponId}
           />
         </>
       )}
@@ -138,6 +161,30 @@ export function GameScreen() {
           }}
           onRestartLevel={() => { engine.restartFromLevel(engine.levelIndex); engine.setPaused(false); setStage('playing'); }}
           onMainMenu={() => { setScreen('mainMenu'); }}
+          onShop={() => { shopFromPause.current = true; setStage('shop'); }}
+        />
+      )}
+
+      {engine && stage === 'shop' && (
+        <ShopOverlay
+          variant="overlay"
+          heldWeaponId={engine.player.hasSpecialWeaponId}
+          onPurchased={(id) => { engine.player.hasSpecialWeaponId = id; }}
+          onClose={() => {
+            if (shopFromPause.current) {
+              shopFromPause.current = false;
+              setStage('paused');
+              return;
+            }
+            const next = afterShopStage.current;
+            afterShopStage.current = null;
+            if (next === 'upgrade') {
+              setStage('upgrade');
+            } else {
+              setStage('playing');
+              engine.proceedToNextLevel();
+            }
+          }}
         />
       )}
 

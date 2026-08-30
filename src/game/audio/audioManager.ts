@@ -6,7 +6,8 @@ export type SoundId =
   | 'hit' | 'heavyHit' | 'criticalHit' | 'jump' | 'land' | 'weaponSwing'
   | 'enemyHit' | 'vomit' | 'explosion' | 'superpower'
   | 'victory' | 'gameOver' | 'bossIntro' | 'block' | 'dodge' | 'upgrade' | 'menuTap'
-  | 'storkFlyby' | 'surprise' | 'diaperSplat';
+  | 'storkFlyby' | 'surprise' | 'diaperSplat'
+  | 'coinPickup' | 'heartPickup' | 'shopBuy' | 'specialActivate' | 'laserCharge' | 'laserFire' | 'ravenCaw';
 
 interface SoundSpec {
   wave: OscillatorType | 'noise';
@@ -49,6 +50,19 @@ const SOUND_SPECS: Record<SoundId, SoundSpec> = {
   storkFlyby: { wave: 'triangle', freqStart: 260, freqEnd: 420, durationMs: 260, volume: 0.3, attackMs: 10 },
   surprise: { wave: 'square', freqStart: 900, freqEnd: 1400, durationMs: 140, volume: 0.34, attackMs: 3 },
   diaperSplat: { wave: 'noise', freqStart: 300, freqEnd: 60, durationMs: 220, volume: 0.4, attackMs: 4, punch: true },
+  // Persistent-progression pass: a bright two-note "cha-ching" for coins, a
+  // warm rising chime for a heart, a friendly register-bell for a shop
+  // purchase, a sting to announce any special weapon firing, and a
+  // charge-up whine + sharp discharge for the laser specifically.
+  coinPickup: { wave: 'sine', freqStart: 720, freqEnd: 1180, durationMs: 130, volume: 0.3, attackMs: 3 },
+  heartPickup: { wave: 'sine', freqStart: 500, freqEnd: 820, durationMs: 320, volume: 0.4, attackMs: 12 },
+  shopBuy: { wave: 'triangle', freqStart: 660, freqEnd: 990, durationMs: 200, volume: 0.34, attackMs: 6 },
+  specialActivate: { wave: 'sawtooth', freqStart: 180, freqEnd: 620, durationMs: 260, volume: 0.4, attackMs: 8 },
+  laserCharge: { wave: 'sawtooth', freqStart: 90, freqEnd: 900, durationMs: 500, volume: 0.36, attackMs: 40 },
+  laserFire: { wave: 'square', freqStart: 1400, freqEnd: 220, durationMs: 260, volume: 0.55, attackMs: 2, punch: true },
+  // A short, coarse caw for the raven companion's personality beats —
+  // noise-based so it reads as a bird call rather than a musical tone.
+  ravenCaw: { wave: 'noise', freqStart: 900, freqEnd: 500, durationMs: 140, volume: 0.28, attackMs: 2, punch: true },
 };
 
 // Section 4/5/7 (polish pass): several distinct fart "personalities" —

@@ -54,6 +54,15 @@ export function Hud({ hud, onPause }: Props) {
           {hud.combo > 1 && (
             <div style={{ ...scoreChipStyle, color: '#ffd54f' }}>COMBO x{hud.combo}</div>
           )}
+          <div
+            key={hud.coinFlash ? 'flash' : 'still'}
+            style={{
+              ...scoreChipStyle, color: '#ffd54f',
+              animation: hud.coinFlash ? 'coinFlashPulse 0.55s ease-out' : 'none',
+            }}
+          >
+            🪙 {hud.coins.toLocaleString('de-DE')}
+          </div>
         </div>
       </div>
 
@@ -90,12 +99,15 @@ function clampPct(v: number): number {
   return Math.max(0, Math.min(1, v));
 }
 
+// Persistent-progression pass (brief section 12/18): lives shown as
+// ❤️/🖤 hearts — matches the brief's own worked example ("❤️❤️🖤") rather
+// than the earlier baby-icon lives row.
 function LivesRow({ remaining, max }: { remaining: number; max: number }) {
   return (
-    <div style={{ display: 'flex', gap: 3 }} title={`${remaining} Versuche übrig`}>
+    <div style={{ display: 'flex', gap: 3 }} title={`${remaining} Leben übrig`}>
       {Array.from({ length: max }, (_, i) => (
-        <span key={i} style={{ fontSize: 12, opacity: i < remaining ? 1 : 0.28, filter: i < remaining ? 'none' : 'grayscale(1)' }}>
-          👶
+        <span key={i} style={{ fontSize: 12 }}>
+          {i < remaining ? '❤️' : '🖤'}
         </span>
       ))}
     </div>

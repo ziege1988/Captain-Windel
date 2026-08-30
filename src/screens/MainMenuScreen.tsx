@@ -35,6 +35,7 @@ export function MainMenuScreen() {
           CAPTAIN WINDEL
         </h1>
         <p style={{ opacity: 0.75, marginTop: 8 }}>Windel. Umhang. Absurde Superkräfte.</p>
+        <p style={{ marginTop: 10, fontSize: 15, fontWeight: 700, color: '#ffd54f' }}>🪙 {save.coins}</p>
       </div>
 
       <StickFigurePreview />
@@ -46,6 +47,7 @@ export function MainMenuScreen() {
             WEITER (Level {save.highestLevelReached})
           </button>
         )}
+        <button className="big-button secondary" onClick={tap(() => setScreen('shop'))}>💰 WAFFENKAMMER</button>
         <button className="big-button secondary" onClick={tap(() => setScreen('equipment'))}>AUSRÜSTUNG</button>
         <button className="big-button secondary" onClick={tap(() => setScreen('superpowers'))}>SUPERKRÄFTE</button>
         <button className="big-button secondary" onClick={tap(() => setScreen('highscore'))}>HIGH SCORE</button>

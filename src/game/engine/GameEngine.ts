@@ -1,4 +1,4 @@
-import type { SuperpowerId, WeaponDef, WeaponId } from '../types';
+import type { BossDef, SpecialWeaponId, SuperpowerId, WeaponDef, WeaponId } from '../types';
 import { Fighter, freshStatus } from '../entities/Fighter';
 import { createBoss, createEnemy, createPlayer } from '../entities/factory';
 import { ENEMIES } from '../../data/enemies';
@@ -8,6 +8,7 @@ import { getLevel } from '../../data/levels';
 import { BALANCE, enemyAggression, enemyRecoveryBonusMs, enemyTelegraphMs, readyDurationMs } from '../../data/balance';
 import { WEAPONS } from '../../data/weapons';
 import { SUPERPOWERS } from '../../data/superpowers';
+import { SPECIAL_WEAPONS, SPECIAL_WEAPON_UNLOCK_LEVELS } from '../../data/specialWeapons';
 import type { SaveData } from '../../storage/saveData';
 import { useAppStore } from '../../state/appStore';
 import { decideAiAction } from '../ai/aiTypes';
@@ -41,6 +42,10 @@ export interface HudState {
   airSupportUnlocked: boolean;
   airSupportCooldownMs: number;
   hasStorkBonusWeapon: boolean;
+  // Persistent-progression pass.
+  coins: number;
+  coinFlash: boolean;
+  specialWeaponId: SpecialWeaponId | null;
   weaponId: WeaponId;
   bossIntroText: string;
   levelWonInfo: { score: number; leveledUp: boolean } | null;
@@ -62,13 +67,31 @@ interface Projectile {
 
 interface Hazard {
   id: number;
-  kind: 'egg' | 'balloon' | 'banana' | 'bonusBomb' | 'fireWave' | 'frostNova' | 'diaperBomb';
+  kind: 'egg' | 'balloon' | 'banana' | 'bonusBomb' | 'fireWave' | 'frostNova' | 'diaperBomb'
+    | 'poopBomb' | 'explodingDuck' | 'bigBoomerangOut' | 'bigBoomerangBack' | 'tornado' | 'eggBomberEgg';
   pos: { x: number; y: number };
   vel: { x: number; y: number };
   timer: number;
   radius: number;
   owner: 'player' | 'enemy';
   triggered: boolean;
+}
+
+// Persistent-progression pass: a boss-dropped reward the player walks
+// (or, once past its brief "pop up" beat, is drawn) into. Kept as its own
+// array rather than folded into Hazard — pickups are always the player's
+// to collect and never "trigger" a hazard effect on contact, they just
+// get credited. `homing` flicks on a short delay after spawning so the
+// reward is guaranteed to actually reach the player even while the level-
+// won screen has frozen normal gameplay input (see updatePickups).
+interface Pickup {
+  id: number;
+  kind: 'coin' | 'heart';
+  pos: { x: number; y: number };
+  vel: { x: number; y: number };
+  ageMs: number;
+  value: number;
+  homing: boolean;
 }
 
 // Humorous effects pass: the stork-with-baby flying entity shared by the
@@ -93,6 +116,75 @@ interface StorkFlight {
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
+}
+
+// ---------------------------------------------------------------------
+// Persistent-progression pass: special-weapon state shapes
+// ---------------------------------------------------------------------
+
+type RavenPhase = 'entering' | 'hover' | 'diving' | 'pecking' | 'returning' | 'leaving';
+
+// The raven companion (section 7 of the brief): a genuine small ally, not
+// a particle effect — its own health bar, its own simple state machine
+// (hover near the player -> occasionally dive at the enemy -> peck ->
+// return -> repeat), can be damaged by the enemy while diving/pecking, and
+// leaves (flies off) on either running out of health or its time limit.
+interface RavenState {
+  pos: { x: number; y: number };
+  facing: 1 | -1;
+  phase: RavenPhase;
+  health: number;
+  maxHealth: number;
+  ageMs: number;
+  maxAgeMs: number;
+  phaseTimerMs: number;
+  phaseDurationMs: number;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  attackCooldownMs: number;
+  wingPhase: number;
+  cawTimerMs: number;
+}
+
+// Shared by the laser cannon and the ice cannon — a real multi-layer beam
+// (outer glow + bright core + hot center) sweeping from the player to the
+// enemy over `totalMs`, rather than a flat line.
+interface BeamEffect {
+  color: string;
+  coreColor: string;
+  ageMs: number;
+  totalMs: number;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  impactApplied: boolean;
+  freeze?: boolean;
+}
+
+// A crazed chicken sprinting in a straight line across the ground and
+// ramming through the enemy on the way — a ground-level cousin of the
+// stork flight system, but running rather than flying.
+interface ChickenRun {
+  elapsedMs: number;
+  totalMs: number;
+  dir: 1 | -1;
+  startX: number;
+  endX: number;
+  y: number;
+  effectFired: boolean;
+}
+
+// Visual-only timer for the bee swarm special weapon, layered on top of a
+// few discrete scheduled stings (see updateBeeSwarmEffect) — the swarm
+// itself is drawn as several small dots orbiting the enemy, not a real
+// physics hazard.
+interface BeeSwarmEffect {
+  ageMs: number;
+  totalMs: number;
+  hitsFired: number;
 }
 
 // Section 8 (quality update): campaign levels that grant the player a
@@ -122,6 +214,7 @@ interface ComicText {
 
 let hazardCounter = 0;
 let projectileCounter = 0;
+let pickupCounter = 0;
 
 // Fallback size used only until the canvas is actually mounted/measured;
 // resize() immediately replaces this with the real, undistorted viewport
@@ -195,6 +288,20 @@ export class GameEngine {
   projectiles: Projectile[] = [];
   hazards: Hazard[] = [];
   comicTexts: ComicText[] = [];
+  pickups: Pickup[] = [];
+  coinFlashMs = 0;
+
+  // Persistent-progression pass: the raven companion, a beam effect shared
+  // by the laser cannon and ice cannon, and the ground-running chicken
+  // charge — each a small self-contained state object rather than folded
+  // into the generic Hazard system, since none of them fit its
+  // spawn-travel-trigger-once shape (a persistent companion with its own
+  // HP, a screen-space beam with no physical position, a homing ground
+  // dash) — see useSpecialWeapon() and its per-weapon methods below.
+  raven: RavenState | null = null;
+  beamEffect: BeamEffect | null = null;
+  chickenRun: ChickenRun | null = null;
+  beeSwarmEffect: BeeSwarmEffect | null = null;
 
   superpowerCooldowns: Map<SuperpowerId, number> = new Map();
   save: SaveData;
@@ -217,6 +324,15 @@ export class GameEngine {
     this.levelIndex = startLevel;
     this.chaosMode = startLevel > BALANCE.campaign.totalLevels;
     this.player = createPlayer(this.layout.minX + 120, this.layout.groundY, save);
+    // Persistent-progression pass: a special weapon bought from the
+    // main-menu shop (before this run existed) is stashed in
+    // save.pendingSpecialWeapon — consume it into the player's single held
+    // slot right as the run starts, then clear the pending flag so it isn't
+    // handed out again next run.
+    if (save.pendingSpecialWeapon) {
+      this.player.hasSpecialWeaponId = save.pendingSpecialWeapon;
+      useAppStore.getState().setPendingSpecialWeapon(null);
+    }
     this.resize();
     this.loadLevel(this.levelIndex);
   }
@@ -295,6 +411,7 @@ export class GameEngine {
     this.bossDefId = level.bossId ?? null;
     this.projectiles = [];
     this.hazards = [];
+    this.pickups = [];
     this.storkFlight = null;
 
     // Section 1: start with clear daylight between the two fighters rather
@@ -352,6 +469,22 @@ export class GameEngine {
       this.player.hasStorkBonusWeapon = true;
       useAppStore.getState().claimStorkBonusMilestone(index);
       this.showToast('🦢👶 STORCH & BABY ERHALTEN!', 2000);
+    }
+
+    // Persistent-progression pass: one shop special weapon unlocks per boss
+    // milestone level — permanently, independent of bonusWeaponMilestones/
+    // storkBonusMilestones above, and never re-claimed once the store shows
+    // it as unlocked (read fresh here rather than via this.save, since a
+    // purchase/unlock made through the store elsewhere this run wouldn't be
+    // reflected on the possibly-stale reference captured in the constructor).
+    const unlockId = SPECIAL_WEAPON_UNLOCK_LEVELS[index];
+    if (unlockId) {
+      const liveSave = useAppStore.getState().save;
+      if (!liveSave.unlockedSpecialWeapons.includes(unlockId)) {
+        useAppStore.getState().unlockSpecialWeapon(unlockId);
+        const def = SPECIAL_WEAPONS[unlockId];
+        this.showToast(`🔓 NEU IN DER WAFFENKAMMER: ${def.icon} ${def.name}!`, 2200);
+      }
     }
 
     this.levelWonHandled = false;
@@ -507,6 +640,393 @@ export class GameEngine {
       if (this.phase !== 'playing' && this.phase !== 'levelWon') return;
       this.startStorkFlight('bonusWeapon');
     }, 700);
+  }
+
+  // Persistent-progression pass: fires the player's single shop-bought
+  // special weapon (section 4/5/21 of the brief) — spectacular, one-time,
+  // consumed the instant it's used, never a substitute for the normal
+  // weapon/superpower loop. Dispatches to one of ten distinct effects; see
+  // fireSpecialWeapon below.
+  useSpecialWeapon(): void {
+    if (this.phase !== 'playing') return;
+    if (!this.player.canAct()) return;
+    const id = this.player.hasSpecialWeaponId;
+    if (!id) return;
+    if (!this.enemy || this.enemy.isDead) return;
+    this.player.hasSpecialWeaponId = null;
+    this.player.setAnim('superpower', true);
+    audio.play('specialActivate');
+    this.fireSpecialWeapon(id);
+  }
+
+  private fireSpecialWeapon(id: SpecialWeaponId): void {
+    switch (id) {
+      case 'chickenAttack': this.launchChickenAttack(); break;
+      case 'poopCatapult': this.launchPoopCatapult(); break;
+      case 'bigBoomerang': this.throwBigBoomerang(); break;
+      case 'beeSwarm': this.launchBeeSwarm(); break;
+      case 'explodingDuck': this.launchExplodingDuck(); break;
+      case 'raven': this.deploySpecialRaven(); break;
+      case 'eggBomber': this.launchEggBomber(); break;
+      case 'iceCannon': this.fireIceCannon(); break;
+      case 'tornadoStrike': this.summonTornado(); break;
+      case 'laser': this.fireLaserCannon(); break;
+    }
+  }
+
+  // --- individual special-weapon launchers -----------------------------
+
+  /** 🐔 Hühner-Angriff — a crazed chicken sprints across the ground and
+   * rams the enemy (see ChickerRun/updateChickenRun/renderChickenRun). */
+  private launchChickenAttack(): void {
+    const enemy = this.enemy;
+    if (!enemy) return;
+    const dir: 1 | -1 = enemy.body.pos.x >= this.player.body.pos.x ? 1 : -1;
+    this.chickenRun = {
+      elapsedMs: 0, totalMs: 900, dir,
+      startX: this.player.body.pos.x, endX: enemy.body.pos.x,
+      y: this.layout.groundY, effectFired: false,
+    };
+    this.showToast('🐔 HÜHNER-ANGRIFF!', 900);
+  }
+
+  /** 💩 Kot-Katapult — a lobbed distraction hit, arcing like the bonus-bomb
+   * throw but dazing rather than exploding. */
+  private launchPoopCatapult(): void {
+    const enemy = this.enemy;
+    const player = this.player;
+    if (!enemy) return;
+    const dir: 1 | -1 = enemy.body.pos.x >= player.body.pos.x ? 1 : -1;
+    const dist = Math.max(120, Math.abs(enemy.body.pos.x - player.body.pos.x));
+    hazardCounter += 1;
+    this.hazards.push({
+      id: hazardCounter, kind: 'poopBomb',
+      pos: { x: player.body.pos.x + dir * 30, y: this.layout.groundY - 90 },
+      vel: { x: dir * (dist / 0.85), y: -260 },
+      timer: 1100, radius: 42, owner: 'player', triggered: false,
+    });
+  }
+
+  /** 🪃 Riesen-Bumerang — flies out, hits once, then flies itself home (see
+   * updateHazards' bigBoomerangBack homing + triggerHazard's conversion). */
+  private throwBigBoomerang(): void {
+    const enemy = this.enemy;
+    const player = this.player;
+    if (!enemy) return;
+    const dir: 1 | -1 = enemy.body.pos.x >= player.body.pos.x ? 1 : -1;
+    hazardCounter += 1;
+    this.hazards.push({
+      id: hazardCounter, kind: 'bigBoomerangOut',
+      pos: { x: player.body.pos.x + dir * 20, y: this.layout.groundY - 70 },
+      vel: { x: dir * 560, y: 0 },
+      timer: 1400, radius: 46, owner: 'player', triggered: false,
+    });
+  }
+
+  /** 🐝 Bienenschwarm — a swarm that briefly pursues the enemy, stinging a
+   * few times over its lifetime (see updateBeeSwarmEffect). */
+  private launchBeeSwarm(): void {
+    if (!this.enemy) return;
+    this.beeSwarmEffect = { ageMs: 0, totalMs: 1800, hitsFired: 0 };
+    this.showToast('🐝 BIENENSCHWARM!', 900);
+  }
+
+  /** 🦆 Explodierende Ente — waddles into range, then a real AoE blast. */
+  private launchExplodingDuck(): void {
+    const enemy = this.enemy;
+    const player = this.player;
+    if (!enemy) return;
+    const dir: 1 | -1 = enemy.body.pos.x >= player.body.pos.x ? 1 : -1;
+    hazardCounter += 1;
+    this.hazards.push({
+      id: hazardCounter, kind: 'explodingDuck',
+      pos: { x: player.body.pos.x + dir * 26, y: this.layout.groundY - 18 },
+      vel: { x: dir * 150, y: 0 },
+      timer: 2400, radius: 40, owner: 'player', triggered: false,
+    });
+  }
+
+  /** 🐦 Raben-Assistent — a real temporary ally, not a particle effect; see
+   * RavenState/updateRaven/renderRaven for the full behaviour. */
+  private deploySpecialRaven(): void {
+    const player = this.player;
+    const startX = player.body.pos.x - player.facing * 260;
+    const startY = this.layout.groundY - 260;
+    const hoverX = player.body.pos.x - player.facing * 34;
+    const hoverY = this.layout.groundY - 165;
+    this.raven = {
+      pos: { x: startX, y: startY }, facing: player.facing,
+      phase: 'entering', health: 40, maxHealth: 40,
+      ageMs: 0, maxAgeMs: 15000,
+      phaseTimerMs: 500, phaseDurationMs: 500,
+      fromX: startX, fromY: startY, toX: hoverX, toY: hoverY,
+      attackCooldownMs: 1200, wingPhase: 0, cawTimerMs: 1800 + Math.random() * 1500,
+    };
+    this.showToast('🐦 RABE IM EINSATZ!', 1200);
+  }
+
+  /** 🥚 Eier-Bomber — a short volley of eggs dropped over the enemy. */
+  private launchEggBomber(): void {
+    if (!this.enemy) return;
+    this.showToast('🥚 EIER-BOMBER!', 1000);
+    audio.play('specialActivate');
+    for (let i = 0; i < 3; i++) {
+      window.setTimeout(() => {
+        const enemy = this.enemy;
+        if (!enemy || enemy.isDead) return;
+        const offset = (i - 1) * 34;
+        hazardCounter += 1;
+        this.hazards.push({
+          id: hazardCounter, kind: 'eggBomberEgg',
+          pos: { x: enemy.body.pos.x + offset, y: this.layout.groundY - 220 },
+          vel: { x: 0, y: 40 }, timer: 1400, radius: 44, owner: 'player', triggered: false,
+        });
+        this.particles.burst({ x: enemy.body.pos.x + offset, y: this.layout.groundY - 220 }, 4, {
+          color: '#ffffff', shape: 'circle', size: 4, life: 0.3, maxLife: 0.3,
+        });
+      }, i * 220);
+    }
+  }
+
+  /** 🧊 Eis-Kanone — the same shared beam effect as the laser cannon (see
+   * BeamEffect/updateBeamEffect), but slower, weaker, and freezing rather
+   * than knocking back — a defensive/control pick, not a damage pick. */
+  private fireIceCannon(): void {
+    const player = this.player;
+    if (!this.enemy) return;
+    audio.play('laserCharge');
+    window.setTimeout(() => {
+      const enemy = this.enemy;
+      if (!enemy) return;
+      this.beamEffect = {
+        color: 'rgba(129,212,250,0.4)', coreColor: '#e1f5fe',
+        ageMs: 0, totalMs: 520, freeze: true,
+        fromX: player.body.pos.x + player.facing * 30, fromY: this.layout.groundY - 65,
+        toX: enemy.body.pos.x, toY: this.layout.groundY - 60,
+        impactApplied: false,
+      };
+      audio.play('laserFire');
+      this.shake.add(0.25);
+    }, 420);
+  }
+
+  /** 🌀 Mini-Tornado — spawned right on the enemy, see triggerHazard's
+   * 'tornado' branch for the hit + multi-pulse fling. */
+  private summonTornado(): void {
+    const enemy = this.enemy;
+    if (!enemy) return;
+    hazardCounter += 1;
+    this.hazards.push({
+      id: hazardCounter, kind: 'tornado',
+      pos: { x: enemy.body.pos.x, y: this.layout.groundY - 60 },
+      vel: { x: 0, y: 0 }, timer: 260, radius: 70, owner: 'player', triggered: false,
+    });
+    this.particles.burst({ x: enemy.body.pos.x, y: this.layout.groundY - 20 }, 20, {
+      color: '#b0bec5', shape: 'dust', size: 10, life: 0.6, maxLife: 0.6, gravity: -20,
+    });
+  }
+
+  /** 🔴 Laserkanone (brief section 6): charge -> a real travelling beam ->
+   * a spectacular impact -> high damage -> consumed. Shares BeamEffect with
+   * the ice cannon, undamped/red instead of icy/blue. */
+  private fireLaserCannon(): void {
+    const player = this.player;
+    if (!this.enemy) return;
+    audio.play('laserCharge');
+    this.particles.burst({ x: player.body.pos.x + player.facing * 20, y: this.layout.groundY - 60 }, 14, {
+      color: '#ff1744', shape: 'spark', size: 6, life: 0.5, maxLife: 0.5, gravity: 0,
+    });
+    window.setTimeout(() => {
+      const enemy = this.enemy;
+      if (!enemy) return;
+      this.beamEffect = {
+        color: 'rgba(255,23,68,0.35)', coreColor: '#ff5252',
+        ageMs: 0, totalMs: 420,
+        fromX: player.body.pos.x + player.facing * 30, fromY: this.layout.groundY - 65,
+        toX: enemy.body.pos.x, toY: this.layout.groundY - 60,
+        impactApplied: false,
+      };
+      audio.play('laserFire');
+      this.shake.add(0.3);
+    }, 480);
+  }
+
+  private setRavenPhase(raven: RavenState, phase: RavenPhase, durationMs: number, toX: number, toY: number): void {
+    raven.phase = phase;
+    raven.phaseDurationMs = durationMs;
+    raven.phaseTimerMs = durationMs;
+    raven.fromX = raven.pos.x;
+    raven.fromY = raven.pos.y;
+    raven.toX = toX;
+    raven.toY = toY;
+  }
+
+  // --- per-tick updates for the special-weapon state objects -----------
+
+  private updateBeamEffect(dtMs: number): void {
+    const beam = this.beamEffect;
+    if (!beam) return;
+    beam.ageMs += dtMs;
+    const impactAt = beam.totalMs * 0.35;
+    if (!beam.impactApplied && beam.ageMs >= impactAt) {
+      beam.impactApplied = true;
+      const target = this.enemy;
+      if (target && !target.isDead) {
+        const pct = beam.freeze ? 0.08 : 0.25;
+        const dmg = Math.round(target.maxHealth * pct);
+        this.dealDamageTo(target, applyDefense(dmg, target.stats.defense), false);
+        if (beam.freeze) {
+          target.applyFreeze(1600);
+          target.applySlow(0.4, 3200);
+        } else {
+          applyKnockback(target.body, Math.sign(target.body.pos.x - beam.fromX) || 1, 300, 0.4);
+          target.setAnim('knockback', true);
+          target.hitstunRemainingMs = 650;
+        }
+        this.particles.burst({ x: beam.toX, y: beam.toY }, 24, {
+          color: beam.freeze ? '#b3e5fc' : '#ff8a65',
+          shape: beam.freeze ? 'circle' : 'spark',
+          size: 9, life: 0.5, maxLife: 0.5, gravity: beam.freeze ? 0 : -40,
+        });
+        this.shake.add(beam.freeze ? 0.3 : 0.55);
+        this.hitStop.trigger(beam.freeze ? 60 : 100);
+        this.spawnComicText(beam.freeze ? 'EISKALT!' : 'ZAP!!!', beam.toX, beam.toY - 30, beam.freeze ? '#e1f5fe' : '#ff5252');
+        this.addScore(beam.freeze ? 500 : 800);
+      }
+    }
+    if (beam.ageMs >= beam.totalMs) this.beamEffect = null;
+  }
+
+  private updateChickenRun(dtMs: number): void {
+    const run = this.chickenRun;
+    if (!run) return;
+    run.elapsedMs += dtMs;
+    const t = Math.min(1, run.elapsedMs / run.totalMs);
+    if (!run.effectFired && t >= 0.85 && this.enemy && !this.enemy.isDead) {
+      run.effectFired = true;
+      const x = lerp(run.startX, run.endX, t);
+      const dmg = Math.round(this.enemy.maxHealth * 0.1);
+      this.dealDamageTo(this.enemy, applyDefense(dmg, this.enemy.stats.defense), false);
+      applyKnockback(this.enemy.body, run.dir, 320, 0.4);
+      this.enemy.setAnim('knockback', true);
+      this.enemy.hitstunRemainingMs = 500;
+      this.particles.burst({ x, y: this.layout.groundY - 30 }, 14, { color: '#fff59d', shape: 'spark', size: 7, life: 0.4, maxLife: 0.4 });
+      this.spawnComicText('BAGAWK!', x, this.layout.groundY - 60, '#fff59d');
+      audio.play('hit');
+      this.addScore(300);
+    }
+    if (t >= 1) this.chickenRun = null;
+  }
+
+  private updateBeeSwarmEffect(dtMs: number): void {
+    const swarm = this.beeSwarmEffect;
+    if (!swarm) return;
+    swarm.ageMs += dtMs;
+    const hitTimes = [250, 800, 1350];
+    while (swarm.hitsFired < hitTimes.length && swarm.ageMs >= hitTimes[swarm.hitsFired]) {
+      const idx = swarm.hitsFired;
+      swarm.hitsFired += 1;
+      const enemy = this.enemy;
+      if (enemy && !enemy.isDead) {
+        const dmg = Math.round(enemy.maxHealth * 0.035);
+        this.dealDamageTo(enemy, applyDefense(dmg, enemy.stats.defense), false);
+        enemy.applySlow(0.8, 500);
+        this.particles.burst(enemy.body.pos, 6, { color: '#ffca28', shape: 'spark', size: 4, life: 0.3, maxLife: 0.3 });
+        audio.play('hit');
+        if (idx === 0) this.spawnComicText('BSSSZZ!', enemy.body.pos.x, this.layout.groundY - 140, '#ffca28');
+      }
+    }
+    if (swarm.ageMs >= swarm.totalMs) this.beeSwarmEffect = null;
+  }
+
+  private updateRaven(dtMs: number): void {
+    const raven = this.raven;
+    if (!raven) return;
+    raven.ageMs += dtMs;
+    raven.wingPhase += dtMs;
+    raven.cawTimerMs -= dtMs;
+    if (raven.cawTimerMs <= 0 && raven.phase !== 'leaving') {
+      raven.cawTimerMs = 2600 + Math.random() * 2600;
+      audio.play('ravenCaw');
+    }
+
+    const enemyGone = !this.enemy || this.enemy.isDead;
+    if (raven.phase !== 'leaving' && (raven.ageMs >= raven.maxAgeMs || raven.health <= 0 || enemyGone)) {
+      this.setRavenPhase(raven, 'leaving', 700, raven.pos.x - raven.facing * 200, raven.pos.y - 220);
+    }
+
+    raven.phaseTimerMs -= dtMs;
+    const t = raven.phaseDurationMs > 0 ? Math.min(1, 1 - Math.max(0, raven.phaseTimerMs / raven.phaseDurationMs)) : 1;
+    const hoverX = this.player.body.pos.x - this.player.facing * 34 + Math.sin(raven.ageMs / 260) * 6;
+    const hoverY = this.layout.groundY - 165 + Math.sin(raven.ageMs / 190) * 4;
+
+    switch (raven.phase) {
+      case 'entering':
+        raven.pos.x = lerp(raven.fromX, raven.toX, t);
+        raven.pos.y = lerp(raven.fromY, raven.toY, t);
+        raven.facing = this.player.facing;
+        if (raven.phaseTimerMs <= 0) raven.phase = 'hover';
+        break;
+      case 'hover':
+        raven.pos.x = hoverX;
+        raven.pos.y = hoverY;
+        raven.facing = this.player.facing;
+        raven.attackCooldownMs -= dtMs;
+        if (raven.attackCooldownMs <= 0 && !enemyGone && this.enemy) {
+          this.setRavenPhase(raven, 'diving', 420, this.enemy.body.pos.x, this.layout.groundY - 90);
+        }
+        break;
+      case 'diving': {
+        raven.pos.x = lerp(raven.fromX, raven.toX, t);
+        raven.pos.y = lerp(raven.fromY, raven.toY, t);
+        raven.facing = raven.toX >= raven.fromX ? 1 : -1;
+        const enemy = this.enemy;
+        if (enemy && enemy.anim === 'attack' && distance(raven.pos, enemy.body.pos) < 70 && Math.random() < 0.05) {
+          raven.health -= 8;
+          this.particles.burst(raven.pos, 6, { color: '#424242', shape: 'spark', size: 4, life: 0.3, maxLife: 0.3 });
+        }
+        if (raven.phaseTimerMs <= 0) {
+          if (enemy && !enemy.isDead) {
+            const dmg = Math.round(enemy.maxHealth * 0.025);
+            this.dealDamageTo(enemy, applyDefense(dmg, enemy.stats.defense), false);
+            enemy.hitstunRemainingMs = Math.max(enemy.hitstunRemainingMs, 250);
+            enemy.setAnim('hit', true);
+            this.particles.burst(raven.pos, 8, { color: '#424242', shape: 'spark', size: 5, life: 0.3, maxLife: 0.3 });
+            audio.play('hit');
+            this.addScore(120);
+          }
+          this.setRavenPhase(raven, 'pecking', 280, raven.pos.x, raven.pos.y);
+        }
+        break;
+      }
+      case 'pecking': {
+        raven.pos.x = raven.fromX + Math.sin(raven.ageMs / 30) * 4;
+        const enemy = this.enemy;
+        if (enemy && enemy.anim === 'attack' && Math.random() < 0.05) {
+          raven.health -= 8;
+        }
+        if (raven.phaseTimerMs <= 0) {
+          this.setRavenPhase(raven, 'returning', 420, raven.pos.x, raven.pos.y);
+        }
+        break;
+      }
+      case 'returning':
+        raven.toX = hoverX;
+        raven.toY = hoverY;
+        raven.pos.x = lerp(raven.fromX, raven.toX, t);
+        raven.pos.y = lerp(raven.fromY, raven.toY, t);
+        raven.facing = this.player.facing;
+        if (raven.phaseTimerMs <= 0) {
+          raven.phase = 'hover';
+          raven.attackCooldownMs = 1600 + Math.random() * 1200;
+        }
+        break;
+      case 'leaving':
+        raven.pos.x = lerp(raven.fromX, raven.toX, t);
+        raven.pos.y = lerp(raven.fromY, raven.toY, t);
+        if (raven.phaseTimerMs <= 0) this.raven = null;
+        break;
+    }
   }
 
   private startStorkFlight(mode: StorkMode): void {
@@ -788,6 +1308,19 @@ export class GameEngine {
     this.shake.update(rawDtMs / 1000);
     this.particles.update(dtSec);
     this.updateComicTexts(rawDtMs);
+    // Persistent-progression pass: pickups update unconditionally, like the
+    // systems above — a boss's coin/heart drop must keep animating and stay
+    // collectible even during the frozen 'levelWon' overlay right after the
+    // kill (see updatePickups' own comment).
+    this.updatePickups(dtMs);
+    if (this.coinFlashMs > 0) this.coinFlashMs -= rawDtMs;
+    // Special-weapon effects likewise update unconditionally — a raven's
+    // 15s lifetime, or a beam/chicken/swarm mid-flight, must not freeze if
+    // the enemy dies (or the game pauses/overlays) while one is still active.
+    this.updateBeamEffect(dtMs);
+    this.updateRaven(dtMs);
+    this.updateChickenRun(dtMs);
+    this.updateBeeSwarmEffect(dtMs);
 
     if (this.toastTimerMs > 0) {
       this.toastTimerMs -= rawDtMs;
@@ -1214,6 +1747,7 @@ export class GameEngine {
     if (enemy.kind === 'boss') {
       this.bossesDefeated += 1;
       this.addScore(BALANCE.boss.scoreBonus);
+      if (this.bossDefId) this.spawnBossRewards(enemy, BOSSES[this.bossDefId]);
     } else {
       this.addScore(enemy.scoreValue);
     }
@@ -1240,6 +1774,158 @@ export class GameEngine {
       this.loadLevel(this.levelIndex);
     } else {
       this.phase = 'gameOver';
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Persistent-progression pass: coin/heart pickups
+  // ---------------------------------------------------------------------
+
+  /** Spawns a boss's rewards (section 1/13/16 of the brief): several
+   * individual coins that pop up and briefly scatter before settling, worth
+   * `def.coinReward` combined, plus — for bosses flagged `dropsHeart` — one
+   * extra life pickup. Not every boss drops a heart, so boss fights stay
+   * varied rather than every victory feeling identical. */
+  private spawnBossRewards(enemy: Fighter, def: BossDef): void {
+    const total = def.coinReward;
+    const coinCount = Math.min(8, Math.max(4, Math.round(total / 22)));
+    const baseValue = Math.floor(total / coinCount);
+    const remainder = total - baseValue * coinCount;
+    for (let i = 0; i < coinCount; i++) {
+      const value = baseValue + (i < remainder ? 1 : 0);
+      const angle = (i / coinCount) * Math.PI * 2;
+      pickupCounter += 1;
+      this.pickups.push({
+        id: pickupCounter,
+        kind: 'coin',
+        pos: {
+          x: enemy.body.pos.x + Math.cos(angle) * (14 + Math.random() * 20),
+          y: this.layout.groundY - 90 - Math.random() * 30,
+        },
+        vel: { x: Math.cos(angle) * (60 + Math.random() * 40), y: -200 - Math.random() * 90 },
+        ageMs: 0,
+        value,
+        homing: false,
+      });
+    }
+    if (def.dropsHeart) {
+      pickupCounter += 1;
+      this.pickups.push({
+        id: pickupCounter,
+        kind: 'heart',
+        pos: { x: enemy.body.pos.x, y: this.layout.groundY - 130 },
+        vel: { x: 0, y: -170 },
+        ageMs: 0,
+        value: 1,
+        homing: false,
+      });
+    }
+    this.particles.burst({ x: enemy.body.pos.x, y: this.layout.groundY - 70 }, 16, {
+      color: '#ffd54f', shape: 'spark', size: 8, life: 0.5, maxLife: 0.5,
+    });
+  }
+
+  /** Runs every tick unconditionally (like particles/shake/comicTexts
+   * below), regardless of `phase` — a boss's coin/heart drop must keep
+   * animating and be guaranteed to reach the player even during the frozen
+   * 'levelWon' overlay that follows the kill (see the Pickup interface's
+   * comment). Pickups pop up under light gravity, settle briefly, then home
+   * toward wherever the player currently stands; a 6s age cap forces
+   * collection regardless, so a reward is never stranded off-screen. */
+  private updatePickups(dtMs: number): void {
+    const dtSec = dtMs / 1000;
+    for (let i = this.pickups.length - 1; i >= 0; i--) {
+      const p = this.pickups[i];
+      p.ageMs += dtMs;
+      if (!p.homing) {
+        p.vel.y += BALANCE.physics.gravity * 0.5 * dtSec;
+        p.pos.x += p.vel.x * dtSec;
+        p.pos.y += p.vel.y * dtSec;
+        const floorY = this.layout.groundY - 20;
+        if (p.pos.y >= floorY) {
+          p.pos.y = floorY;
+          p.vel.x *= 0.85;
+          p.vel.y = 0;
+        }
+        if (p.ageMs > 650) p.homing = true;
+      } else {
+        const target = this.player.body.pos;
+        const dx = target.x - p.pos.x;
+        const dy = target.y - 60 - p.pos.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const speed = 230;
+        p.pos.x += (dx / dist) * speed * dtSec;
+        p.pos.y += (dy / dist) * speed * dtSec;
+        if (dist < 26 || p.ageMs > 6000) {
+          this.collectPickup(p);
+          this.pickups.splice(i, 1);
+        }
+      }
+    }
+  }
+
+  private collectPickup(p: Pickup): void {
+    if (p.kind === 'coin') {
+      useAppStore.getState().addCoins(p.value);
+      this.coinFlashMs = 550;
+      this.particles.burst(p.pos, 8, { color: '#ffd54f', shape: 'spark', size: 6 });
+      audio.play('coinPickup');
+    } else {
+      // Section 13 of the brief: a heart must never simply be wasted once
+      // the player already sits at max lives — it converts into a small
+      // bonus-coin reward instead of vanishing for nothing.
+      if (this.livesRemaining < GameEngine.MAX_LIVES) {
+        this.livesRemaining += 1;
+        this.showToast('❤️ LEBEN WIEDERHERGESTELLT!', 1400);
+        audio.play('heartPickup');
+        this.particles.burst(p.pos, 12, { color: '#ff5252', shape: 'circle', size: 7 });
+      } else {
+        useAppStore.getState().addCoins(15);
+        this.coinFlashMs = 550;
+        this.showToast('❤️ bereits voll → +15 🪙 BONUS!', 1400);
+        audio.play('coinPickup');
+        this.particles.burst(p.pos, 8, { color: '#ffd54f', shape: 'spark', size: 6 });
+      }
+    }
+  }
+
+  private renderPickups(ctx: CanvasRenderingContext2D): void {
+    for (const p of this.pickups) {
+      ctx.save();
+      ctx.translate(p.pos.x, p.pos.y);
+      if (p.kind === 'coin') {
+        const shine = 0.5 + Math.sin(performance.now() / 110 + p.id) * 0.5;
+        ctx.fillStyle = '#ffca28';
+        ctx.beginPath();
+        ctx.arc(0, 0, 11, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#f57f17';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.fillStyle = `rgba(255,255,255,${0.25 + shine * 0.35})`;
+        ctx.beginPath();
+        ctx.arc(-3, -3, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#8d6e00';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('$', 0, 1);
+      } else {
+        const pulse = 1 + Math.sin(performance.now() / 150) * 0.14;
+        ctx.scale(pulse, pulse);
+        ctx.fillStyle = '#ff1744';
+        ctx.beginPath();
+        ctx.moveTo(0, 7);
+        ctx.bezierCurveTo(-15, -7, -14, -17, 0, -6);
+        ctx.bezierCurveTo(14, -17, 15, -7, 0, 7);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = '#b71c1c';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      }
+      ctx.restore();
     }
   }
 
@@ -1299,25 +1985,48 @@ export class GameEngine {
     for (let i = this.hazards.length - 1; i >= 0; i--) {
       const h = this.hazards[i];
       h.timer -= dtSec * 1000;
-      if (h.kind === 'bonusBomb' || h.kind === 'diaperBomb') h.vel.y += BALANCE.physics.gravity * 0.7 * dtSec;
+      if (h.kind === 'bonusBomb' || h.kind === 'diaperBomb' || h.kind === 'poopBomb' || h.kind === 'eggBomberEgg') {
+        h.vel.y += BALANCE.physics.gravity * 0.7 * dtSec;
+      }
+      // Persistent-progression pass: the "Riesen-Bumerang" special weapon's
+      // return leg homes on the player's current position every tick
+      // (mirroring updateProjectiles' own boomerang-return math) rather than
+      // flying a fixed line, since the player may have moved since it was
+      // thrown — and it never re-triggers on the way back (see the target
+      // loop below), matching the brief's "kommt garantiert zurück" flavor.
+      if (h.kind === 'bigBoomerangBack') {
+        const dx = this.player.body.pos.x - h.pos.x;
+        const dy = (this.layout.groundY - 70) - h.pos.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const speed = 480;
+        h.vel.x = (dx / len) * speed;
+        h.vel.y = (dy / len) * speed;
+        if (len < 40) {
+          this.hazards.splice(i, 1);
+          continue;
+        }
+      }
       h.pos.x += h.vel.x * dtSec;
       h.pos.y += h.vel.y * dtSec;
       if (h.kind === 'balloon') {
         h.pos.y += Math.sin(h.timer / 200) * 0.6;
       }
 
-      const targets = h.owner === 'enemy' ? [this.player] : this.enemy ? [this.enemy] : [];
-      for (const target of targets) {
-        if (!target || target.isDead || h.triggered) continue;
-        const groundish = h.kind === 'banana' ? target.body.groundY : this.layout.groundY - 55;
-        const dist = distance(h.pos, { x: target.body.pos.x, y: h.kind === 'banana' ? target.body.groundY : groundish });
-        if (dist < h.radius) {
-          this.triggerHazard(h, target);
+      if (h.kind !== 'bigBoomerangBack') {
+        const targets = h.owner === 'enemy' ? [this.player] : this.enemy ? [this.enemy] : [];
+        for (const target of targets) {
+          if (!target || target.isDead || h.triggered) continue;
+          const groundish = h.kind === 'banana' ? target.body.groundY : this.layout.groundY - 55;
+          const dist = distance(h.pos, { x: target.body.pos.x, y: h.kind === 'banana' ? target.body.groundY : groundish });
+          if (dist < h.radius) {
+            this.triggerHazard(h, target);
+          }
         }
       }
 
       if ((h.kind !== 'banana' && h.timer <= 0) || h.triggered) {
-        if ((h.kind === 'egg' || h.kind === 'bonusBomb' || h.kind === 'frostNova' || h.kind === 'diaperBomb') && h.timer <= 0 && !h.triggered) {
+        const timerFired = ['egg', 'bonusBomb', 'frostNova', 'diaperBomb', 'tornado'] as Hazard['kind'][];
+        if (timerFired.includes(h.kind) && h.timer <= 0 && !h.triggered) {
           this.triggerHazard(h, null);
         }
         this.hazards.splice(i, 1);
@@ -1329,6 +2038,26 @@ export class GameEngine {
 
   private triggerHazard(h: Hazard, directTarget: Fighter | null): void {
     h.triggered = true;
+    if (h.kind === 'bigBoomerangOut') {
+      // Deals its hit, then converts into the return leg instead of being
+      // removed — see updateHazards' bigBoomerangBack homing above.
+      audio.play('hit');
+      this.particles.burst(h.pos, 14, { color: '#8d6e63', shape: 'spark', size: 7, life: 0.4, maxLife: 0.4 });
+      this.shake.add(0.3);
+      if (directTarget) {
+        const dmg = Math.round(directTarget.maxHealth * 0.12);
+        this.dealDamageTo(directTarget, applyDefense(dmg, directTarget.stats.defense), false);
+        applyKnockback(directTarget.body, Math.sign(directTarget.body.pos.x - h.pos.x) || 1, 300, 0.4);
+        directTarget.setAnim('knockback', true);
+        directTarget.hitstunRemainingMs = 550;
+        this.spawnComicText('WUMM!', h.pos.x, h.pos.y - 20, '#a1887f');
+        this.addScore(450);
+      }
+      h.kind = 'bigBoomerangBack';
+      h.timer = 1600;
+      h.triggered = false;
+      return;
+    }
     if (h.kind === 'egg') {
       this.particles.burst(h.pos, 20, { color: '#ffb300', shape: 'ring', size: 12 });
       audio.play('explosion');
@@ -1430,6 +2159,83 @@ export class GameEngine {
         this.showToast('VOLLTREFFER MIT DER WINDEL!');
       } else {
         this.showToast('Die Windel verfehlt knapp...');
+      }
+    } else if (h.kind === 'poopBomb') {
+      // "Kot-Katapult" special weapon — a lobbed, mid-power distraction
+      // hit: a real daze (matching the banana peel's own stun beat), not
+      // just chip damage.
+      this.particles.burst(h.pos, 18, { color: '#6d4c2f', shape: 'dust', size: 9, life: 0.5, maxLife: 0.5, gravity: 120 });
+      audio.play('explosion');
+      this.shake.add(0.3);
+      if (directTarget) {
+        const dmg = Math.round(directTarget.maxHealth * 0.08);
+        this.dealDamageTo(directTarget, applyDefense(dmg, directTarget.stats.defense), false);
+        directTarget.setAnim('dazed', true);
+        directTarget.hitstunRemainingMs = 900;
+        directTarget.dazedUntilMs = 900;
+        this.spawnComicText('PLATSCH!', h.pos.x, h.pos.y - 10, '#a1887f');
+        this.addScore(350);
+        this.showToast('💩 VOLLTREFFER!', 900);
+      }
+    } else if (h.kind === 'explodingDuck') {
+      // "Explodierende Ente" — waddles into range, then a real AoE
+      // explosion, not a plain melee hit (matches its category as an aoe
+      // special weapon, priced above the melee-flavoured ones).
+      this.particles.burst(h.pos, 22, { color: '#fff59d', shape: 'circle', size: 6, life: 0.5, maxLife: 0.5, gravity: -40 });
+      this.particles.burst(h.pos, 14, { color: '#616161', shape: 'dust', size: 9, life: 0.5, maxLife: 0.5, gravity: 100 });
+      audio.play('explosion');
+      this.shake.add(0.45);
+      this.hitStop.trigger(80);
+      if (directTarget) {
+        const dmg = Math.round(directTarget.maxHealth * 0.14);
+        this.dealDamageTo(directTarget, applyDefense(dmg, directTarget.stats.defense), false);
+        applyKnockback(directTarget.body, Math.sign(directTarget.body.pos.x - h.pos.x) || 1, 340, 0.45);
+        directTarget.setAnim('knockback', true);
+        directTarget.hitstunRemainingMs = 700;
+        this.spawnComicText('QUAK! BUMM!', h.pos.x, h.pos.y - 30, '#fff59d');
+        this.addScore(500);
+        this.showToast('🦆 QUAK-BOOM!', 900);
+      }
+    } else if (h.kind === 'tornado') {
+      // "Mini-Tornado" — spawned right on top of the enemy (see
+      // summonTornado), so it always fires via its own short fuse rather
+      // than a proximity check. A single hit plus several quick alternating
+      // knockback pulses so the enemy visibly gets "flung around" instead
+      // of one flat shove.
+      const target = this.enemy;
+      if (target && !target.isDead) {
+        const dmg = Math.round(target.maxHealth * 0.1);
+        this.dealDamageTo(target, applyDefense(dmg, target.stats.defense), false);
+        target.applySlow(0.55, 1400);
+        target.setAnim('knockback', true);
+        target.hitstunRemainingMs = 1200;
+        this.spawnComicText('WIRBEL!', h.pos.x, h.pos.y - 40, '#cfd8dc');
+        this.addScore(450);
+        audio.play('hit');
+        this.shake.add(0.5);
+        let pulseDir: 1 | -1 = 1;
+        for (let i = 0; i < 4; i++) {
+          window.setTimeout(() => {
+            const enemy = this.enemy;
+            if (!enemy || enemy.isDead) return;
+            applyKnockback(enemy.body, pulseDir, 220, 0.25);
+            pulseDir = pulseDir === 1 ? -1 : 1;
+            this.particles.burst(enemy.body.pos, 8, { color: '#eceff1', shape: 'dust', size: 6, life: 0.35, maxLife: 0.35, gravity: 0 });
+          }, i * 160);
+        }
+      }
+    } else if (h.kind === 'eggBomberEgg') {
+      // One of several eggs dropped by the "Eier-Bomber" special weapon
+      // (see launchEggBomber) — each a modest hit, several together add up
+      // to a real payoff without any single egg being a huge swing.
+      this.particles.burst(h.pos, 12, { color: '#fff8e1', shape: 'circle', size: 6, life: 0.4, maxLife: 0.4, gravity: 60 });
+      audio.play('hit');
+      if (directTarget) {
+        const dmg = Math.round(directTarget.maxHealth * 0.045);
+        this.dealDamageTo(directTarget, applyDefense(dmg, directTarget.stats.defense), false);
+        directTarget.hitstunRemainingMs = Math.max(directTarget.hitstunRemainingMs, 300);
+        this.spawnComicText('KRACH!', h.pos.x, h.pos.y - 10, '#fff8e1');
+        this.addScore(200);
       }
     }
   }
@@ -1581,6 +2387,7 @@ export class GameEngine {
 
     for (const h of this.hazards) this.renderHazard(ctx, h);
     for (const p of this.projectiles) this.renderProjectile(ctx, p);
+    this.renderPickups(ctx);
 
     if (this.player.bossTelegraph === null) {
       // no-op, player never telegraphs
@@ -1594,6 +2401,10 @@ export class GameEngine {
     for (const f of fighters) (f.kind === 'boss' ? renderBoss : renderFighter)(ctx, f, dtSec);
 
     this.renderStork(ctx);
+    this.renderChickenRun(ctx);
+    this.renderBeeSwarmEffect(ctx);
+    this.renderRaven(ctx);
+    this.renderBeamEffect(ctx);
     this.particles.render(ctx);
     this.renderComicTexts(ctx);
     ctx.restore();
@@ -1716,6 +2527,141 @@ export class GameEngine {
     ctx.restore();
   }
 
+  /** A real multi-layer laser/ice beam (brief section 6: "muss wirklich wie
+   * ein Laserstrahl aussehen, nicht nur eine rote Linie") — a wide soft
+   * glow, a bright core, and a thin white-hot center line, all sweeping out
+   * from the source over the first third of the beam's lifetime so it
+   * genuinely appears to travel across the screen before it fades. */
+  private renderBeamEffect(ctx: CanvasRenderingContext2D): void {
+    const beam = this.beamEffect;
+    if (!beam) return;
+    const growT = Math.min(1, beam.ageMs / (beam.totalMs * 0.35));
+    const curX = lerp(beam.fromX, beam.toX, growT);
+    const curY = lerp(beam.fromY, beam.toY, growT);
+    const fadeStart = beam.totalMs * 0.7;
+    const fadeT = beam.ageMs > fadeStart ? (beam.ageMs - fadeStart) / (beam.totalMs - fadeStart) : 0;
+    const alpha = Math.max(0, 1 - fadeT);
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = beam.color;
+    ctx.lineWidth = 16;
+    ctx.beginPath(); ctx.moveTo(beam.fromX, beam.fromY); ctx.lineTo(curX, curY); ctx.stroke();
+    ctx.strokeStyle = beam.coreColor;
+    ctx.lineWidth = 7;
+    ctx.beginPath(); ctx.moveTo(beam.fromX, beam.fromY); ctx.lineTo(curX, curY); ctx.stroke();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2.4;
+    ctx.beginPath(); ctx.moveTo(beam.fromX, beam.fromY); ctx.lineTo(curX, curY); ctx.stroke();
+    // Muzzle flare at the source, cannon-mouth style.
+    ctx.fillStyle = beam.coreColor;
+    ctx.beginPath();
+    ctx.arc(beam.fromX, beam.fromY, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  private renderChickenRun(ctx: CanvasRenderingContext2D): void {
+    const run = this.chickenRun;
+    if (!run) return;
+    const t = Math.min(1, run.elapsedMs / run.totalMs);
+    const x = lerp(run.startX, run.endX, t);
+    const strideBob = Math.abs(Math.sin(run.elapsedMs / 40)) * 4;
+    ctx.save();
+    ctx.translate(x, this.layout.groundY - strideBob);
+    ctx.scale(run.dir, 1);
+    ctx.fillStyle = '#ff6f00';
+    ctx.beginPath();
+    ctx.moveTo(-3, -6); ctx.lineTo(3, -6); ctx.lineTo(0, 2); ctx.closePath(); ctx.fill();
+    ctx.moveTo(9, -6); ctx.lineTo(15, -6); ctx.lineTo(12, 2); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#fdfdfd';
+    ctx.beginPath();
+    ctx.ellipse(0, -22, 16, 13, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(11, -34, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#e53935';
+    ctx.beginPath();
+    ctx.moveTo(8, -41); ctx.lineTo(11, -46); ctx.lineTo(14, -41); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#ff8f00';
+    ctx.beginPath();
+    ctx.moveTo(17, -34); ctx.lineTo(24, -32); ctx.lineTo(17, -30); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#212121';
+    ctx.beginPath();
+    ctx.arc(14, -36, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  private renderBeeSwarmEffect(ctx: CanvasRenderingContext2D): void {
+    const swarm = this.beeSwarmEffect;
+    const enemy = this.enemy;
+    if (!swarm || !enemy) return;
+    const cx = enemy.body.pos.x;
+    const cy = this.layout.groundY - 100 * enemy.scale;
+    for (let i = 0; i < 6; i++) {
+      const angle = swarm.ageMs / 120 + (i / 6) * Math.PI * 2;
+      const r = 34 + Math.sin(swarm.ageMs / 90 + i) * 6;
+      const bx = cx + Math.cos(angle) * r;
+      const by = cy + Math.sin(angle) * r * 0.6;
+      ctx.save();
+      ctx.translate(bx, by);
+      ctx.fillStyle = '#ffca28';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 3.5, 2.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#212121';
+      ctx.fillRect(-1, -2.5, 1.4, 5);
+      ctx.restore();
+    }
+  }
+
+  /** 🐦 The raven companion (brief section 7) — a genuine small character,
+   * not a particle effect: wings that flap on `wingPhase`, a mini health
+   * bar of its own, and a distinct facing/posture per phase. */
+  private renderRaven(ctx: CanvasRenderingContext2D): void {
+    const raven = this.raven;
+    if (!raven) return;
+    const flap = Math.sin(raven.wingPhase / 70);
+    ctx.save();
+    ctx.translate(raven.pos.x, raven.pos.y);
+    ctx.scale(raven.facing, 1);
+    ctx.fillStyle = '#212121';
+    ctx.save();
+    ctx.rotate(-0.3 - flap * 0.55);
+    ctx.beginPath();
+    ctx.ellipse(-2, 0, 14, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.fillStyle = '#263238';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 11, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(9, -4, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ff8f00';
+    ctx.beginPath();
+    ctx.moveTo(14, -4); ctx.lineTo(20, -2); ctx.lineTo(14, -1); ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(11, -6, 1.6, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#000000';
+    ctx.beginPath(); ctx.arc(11.5, -6, 0.8, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    const pct = Math.max(0, raven.health / raven.maxHealth);
+    ctx.save();
+    ctx.translate(raven.pos.x - 14, raven.pos.y - 24);
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(0, 0, 28, 4);
+    ctx.fillStyle = pct > 0.3 ? '#8bc34a' : '#ff5252';
+    ctx.fillRect(0, 0, 28 * pct, 4);
+    ctx.restore();
+  }
+
   private renderProjectile(ctx: CanvasRenderingContext2D, p: Projectile): void {
     const weapon = WEAPONS[p.weaponId];
     ctx.save();
@@ -1833,6 +2779,84 @@ export class GameEngine {
       ctx.beginPath();
       ctx.arc(0, 0, r, 0, Math.PI * 2);
       ctx.fill();
+    } else if (h.kind === 'poopBomb') {
+      // "Kot-Katapult" — an absurd tumbling brown swirl, tabled visually
+      // apart from bonusBomb (no fuse — it's not an explosive, it's gross).
+      ctx.rotate(h.pos.x * 0.06);
+      ctx.fillStyle = '#6d4c2f';
+      ctx.beginPath();
+      ctx.arc(0, 4, 8, 0, Math.PI * 2);
+      ctx.arc(0, -2, 6, 0, Math.PI * 2);
+      ctx.arc(0, -7, 4, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (h.kind === 'explodingDuck') {
+      // "Explodierende Ente" — a small yellow cartoon duck waddling toward
+      // the enemy, legs bobbing, right up until it detonates.
+      const bob = Math.sin(performance.now() / 60) * 2;
+      ctx.translate(0, bob);
+      ctx.fillStyle = '#ff8f00';
+      ctx.beginPath();
+      ctx.ellipse(-6, 8, 3, 2, 0, 0, Math.PI * 2);
+      ctx.ellipse(6, 8, 3, 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fdd835';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 13, 10, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(9, -8, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ff6f00';
+      ctx.beginPath();
+      ctx.moveTo(14, -8);
+      ctx.lineTo(21, -6);
+      ctx.lineTo(14, -4);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#212121';
+      ctx.beginPath();
+      ctx.arc(11, -10, 1.3, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (h.kind === 'bigBoomerangOut' || h.kind === 'bigBoomerangBack') {
+      // "Riesen-Bumerang" — a real oversized cross-blade, bigger and
+      // chunkier than the normal boomerang weapon's thin arc.
+      ctx.rotate(performance.now() / 90);
+      ctx.fillStyle = '#8d6e63';
+      ctx.strokeStyle = '#4e342e';
+      ctx.lineWidth = 2;
+      for (const angle of [0, Math.PI / 2]) {
+        ctx.save();
+        ctx.rotate(angle);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 26, 8, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+    } else if (h.kind === 'tornado') {
+      // "Mini-Tornado" — a stack of rotating dashed rings, widening toward
+      // the top, standing in for a funnel cloud.
+      const spin = performance.now() / 130;
+      for (let i = 0; i < 4; i++) {
+        const ringY = -i * 14;
+        const r = 14 + i * 7;
+        ctx.strokeStyle = `rgba(207,216,220,${0.85 - i * 0.15})`;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.ellipse(0, ringY, r, r * 0.4, 0, spin + i, spin + i + Math.PI * 1.5);
+        ctx.stroke();
+      }
+    } else if (h.kind === 'eggBomberEgg') {
+      // One of the "Eier-Bomber" eggs — simple and plain, deliberately
+      // smaller/less detailed than the enemy 'egg' hazard so a volley of
+      // several reads as a barrage, not a single big threat.
+      ctx.fillStyle = '#fffde7';
+      ctx.strokeStyle = '#bcaaa4';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 10, 13, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
     }
     ctx.restore();
   }
@@ -1869,6 +2893,14 @@ export class GameEngine {
       airSupportUnlocked: this.levelIndex >= GameEngine.AIR_SUPPORT_UNLOCK_LEVEL,
       airSupportCooldownMs: Math.max(0, this.airSupportCooldownMs),
       hasStorkBonusWeapon: this.player.hasStorkBonusWeapon,
+      // Persistent-progression pass: read the coin balance fresh from the
+      // store rather than this.save — the store replaces the save object
+      // wholesale on every addCoins()/purchaseSpecialWeapon() call, so the
+      // engine's own this.save reference (captured once at construction)
+      // would otherwise go stale the moment the first coin is collected.
+      coins: useAppStore.getState().save.coins,
+      coinFlash: this.coinFlashMs > 0,
+      specialWeaponId: this.player.hasSpecialWeaponId,
       weaponId: this.player.weaponId,
       bossIntroText: this.bossDefId ? BOSSES[this.bossDefId].introText : '',
       levelWonInfo: this.phase === 'levelWon' ? { score: this.score, leveledUp: true } : null,

@@ -1,7 +1,8 @@
 import { create } from 'zustand';
-import type { SuperpowerId, WeaponId } from '../game/types';
+import type { SpecialWeaponId, SuperpowerId, WeaponId } from '../game/types';
 import { loadSaveData, saveSaveData, type SaveData } from '../storage/saveData';
 import { getUnlockedSuperpowers } from '../data/superpowers';
+import { SPECIAL_WEAPONS } from '../data/specialWeapons';
 
 export type ScreenId =
   | 'mainMenu'
@@ -11,7 +12,8 @@ export type ScreenId =
   | 'highscore'
   | 'options'
   | 'gameOver'
-  | 'campaignComplete';
+  | 'campaignComplete'
+  | 'shop';
 
 export interface RunSummary {
   score: number;
@@ -39,6 +41,10 @@ interface AppState {
   markTutorialSeen: () => void;
   claimBonusWeaponMilestone: (level: number) => void;
   claimStorkBonusMilestone: (level: number) => void;
+  addCoins: (amount: number) => void;
+  unlockSpecialWeapon: (id: SpecialWeaponId) => void;
+  purchaseSpecialWeapon: (id: SpecialWeaponId) => boolean;
+  setPendingSpecialWeapon: (id: SpecialWeaponId | null) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -80,6 +86,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     save.bossesDefeated = [];
     save.bonusWeaponMilestonesClaimed = [];
     save.storkBonusMilestonesClaimed = [];
+    // Persistent-progression pass: deliberately NOT touched here — coins
+    // and unlockedSpecialWeapons are the whole point of a permanent
+    // progression layer that survives a lost run (see section 15/17 of the
+    // brief). Only actual shop purchases (purchaseSpecialWeapon) ever spend
+    // coins.
     saveSaveData(save);
     set({ save, lastRunSummary: summary, screen: 'gameOver' });
   },
@@ -156,6 +167,51 @@ export const useAppStore = create<AppState>((set, get) => ({
     const save = { ...get().save };
     if (save.storkBonusMilestonesClaimed.includes(level)) return;
     save.storkBonusMilestonesClaimed = [...save.storkBonusMilestonesClaimed, level];
+    saveSaveData(save);
+    set({ save });
+  },
+
+  // Persistent-progression pass: the one and only way coins ever increase.
+  // Called by GameEngine the instant a boss-dropped coin pickup reaches the
+  // player — persisted immediately so it survives even an abrupt tab close.
+  addCoins: (amount) => {
+    if (amount <= 0) return;
+    const save = { ...get().save, coins: get().save.coins + amount };
+    saveSaveData(save);
+    set({ save });
+  },
+
+  // Called by GameEngine when a level with a special-weapon-unlock
+  // milestone loads for the first time — permanent, survives Game Over,
+  // same one-time-grant shape as claimBonusWeaponMilestone above.
+  unlockSpecialWeapon: (id) => {
+    const save = { ...get().save };
+    if (save.unlockedSpecialWeapons.includes(id)) return;
+    save.unlockedSpecialWeapons = [...save.unlockedSpecialWeapons, id];
+    saveSaveData(save);
+    set({ save });
+  },
+
+  // The one and only way coins ever decrease. Returns whether the purchase
+  // went through (false if too poor or not yet unlocked) so the shop UI can
+  // react without duplicating the balance/unlock checks. Deliberately does
+  // NOT grant the weapon itself — the caller (ShopOverlay) does that, either
+  // into save.pendingSpecialWeapon (main menu, no run active yet) or
+  // directly into the live engine.player.hasSpecialWeaponId (pause menu,
+  // mid-run) — this store has no reference to a running GameEngine.
+  purchaseSpecialWeapon: (id) => {
+    const save = get().save;
+    const def = SPECIAL_WEAPONS[id];
+    if (!save.unlockedSpecialWeapons.includes(id)) return false;
+    if (save.coins < def.price) return false;
+    const next = { ...save, coins: save.coins - def.price };
+    saveSaveData(next);
+    set({ save: next });
+    return true;
+  },
+
+  setPendingSpecialWeapon: (id) => {
+    const save = { ...get().save, pendingSpecialWeapon: id };
     saveSaveData(save);
     set({ save });
   },
