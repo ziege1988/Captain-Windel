@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { useAppStore } from '../state/appStore';
 import { audio } from '../game/audio/audioManager';
 import { MenuArenaBackground } from '../components/MenuArenaBackground';
@@ -16,6 +16,8 @@ export function MainMenuScreen() {
   const startNewRun = useAppStore((s) => s.startNewRun);
   const continueRun = useAppStore((s) => s.continueRun);
   const setScreen = useAppStore((s) => s.setScreen);
+  const resetAllProgress = useAppStore((s) => s.resetAllProgress);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
 
   const canContinue = save.highestLevelReached > 1;
 
@@ -72,8 +74,41 @@ export function MainMenuScreen() {
             <button className="big-button secondary" style={gridButtonStyle} onClick={tap(() => setScreen('highscore'))}>HIGH SCORE</button>
             <button className="big-button secondary" style={gridButtonStyle} onClick={tap(() => setScreen('options'))}>OPTIONEN</button>
           </div>
+          <button
+            className="big-button secondary"
+            style={{ ...compactStyle, opacity: 0.75 }}
+            onClick={tap(() => setShowResetConfirm(true))}
+          >
+            🔄 SPIEL NEU STARTEN
+          </button>
         </div>
       </div>
+
+      {showResetConfirm && (
+        <div style={confirmOverlayStyle}>
+          <div className="panel" style={confirmPanelStyle}>
+            <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 10 }}>SPIEL WIRKLICH ZURÜCKSETZEN?</div>
+            <p style={{ fontSize: 13, opacity: 0.85, margin: '0 0 6px' }}>
+              Dein kompletter Spielfortschritt wird gelöscht: Level, Charaktere, Ausrüstung, Münzen, Superkräfte und alle Freischaltungen.
+            </p>
+            <p style={{ fontSize: 13, opacity: 0.85, margin: '0 0 16px' }}>
+              🏆 Der Highscore bleibt erhalten.
+            </p>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button className="big-button secondary" style={{ flex: 1, minHeight: 40 }} onClick={tap(() => setShowResetConfirm(false))}>
+                ZURÜCK
+              </button>
+              <button
+                className="big-button"
+                style={{ flex: 1, minHeight: 40, background: '#c0392b' }}
+                onClick={tap(() => { setShowResetConfirm(false); resetAllProgress(); })}
+              >
+                JA, ALLES ZURÜCKSETZEN
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -82,3 +117,8 @@ const primaryStyle: CSSProperties = { minHeight: 46, padding: '10px 20px', fontS
 const compactStyle: CSSProperties = { minHeight: 38, padding: '8px 16px', fontSize: '0.85rem' };
 const gridStyle: CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 };
 const gridButtonStyle: CSSProperties = { minHeight: 40, padding: '6px 8px', fontSize: '0.72rem', lineHeight: 1.2 };
+const confirmOverlayStyle: CSSProperties = {
+  position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+  background: 'rgba(0,0,0,0.7)', padding: 24, zIndex: 10,
+};
+const confirmPanelStyle: CSSProperties = { width: '100%', maxWidth: 340, padding: 18, color: '#fff' };

@@ -230,7 +230,10 @@ const GROUND_FRACTION = 0.64;
 // more world-space to move around in (more room, more reachable distance
 // before weapon ranges kick in) while the whole arena still always fits
 // entirely on screen with no side-scrolling camera at all.
-const ARENA_ZOOM = 0.82;
+// Gameplay/animation pass (point 17): pulled out further again — noticeably
+// more ground/landscape/movement room visible, characters read a bit
+// smaller as a direct, intended consequence (never compensated for here).
+const ARENA_ZOOM = 0.62;
 
 export class GameEngine {
   private ctx: CanvasRenderingContext2D;
@@ -257,6 +260,18 @@ export class GameEngine {
   bossIntroTimerMs = 0;
   readyTimerMs = 0;
   levelWonHandled = false;
+  // Gameplay/animation pass (point 2): a brief player victory beat after a
+  // normal (non-boss) kill — enemy falls, player gets a short taunt/fist-pump
+  // moment, THEN the level actually completes — instead of "SIEG!" and the
+  // next screen appearing the instant the corpse finishes its death sequence.
+  private celebrationTimerMs = 0;
+  private celebratingEnemy: Fighter | null = null;
+  // Whirlwind-Furz rework (points 12-15): a genuine physical lift/spin/fall
+  // while the funnel has the enemy — orbits their x position around a
+  // centre while real gravity (via the normal physics body) handles the
+  // vertical arc, so it reads as "the tornado caught them" rather than a
+  // teleport up and back down. null whenever nothing is currently caught.
+  private tornadoCarry: { target: Fighter; ageMs: number; totalMs: number; centerX: number } | null = null;
 
   score = 0;
   combo = 0;
@@ -1234,9 +1249,13 @@ export class GameEngine {
         this.enemy.applyStun(def.effectDurationMs);
         break;
       case 'tornado':
-        applyKnockback(this.enemy.body, this.player.facing, 520, 0.6);
-        this.enemy.setAnim('knockback', true);
-        this.enemy.hitstunRemainingMs = 700;
+        // Points 12-15: no instant knockback here — the real lift/spin/fall
+        // sequence fires once the growing funnel visually reaches the enemy
+        // (see fireSuperpowerVisual's 'tornado' case -> beginTornadoLift),
+        // so it never reads as an immediate teleport the moment the button
+        // is pressed. Just a brief flinch to sell "something's coming."
+        this.enemy.setAnim('hit', true);
+        this.enemy.hitstunRemainingMs = Math.max(this.enemy.hitstunRemainingMs, 350);
         break;
       case 'nuclear':
         applyKnockback(this.enemy.body, this.player.facing, 700, 0.5);
@@ -1446,8 +1465,10 @@ export class GameEngine {
 
     // --- enemy AI ---
     if (enemy) {
-      if (!enemy.isDead) this.updateEnemyAi(enemy, dtMs, dtSec);
+      const tornadoCarried = this.tornadoCarry?.target === enemy;
+      if (!enemy.isDead && !tornadoCarried) this.updateEnemyAi(enemy, dtMs, dtSec);
       stepPhysics(enemy.body, dtSec, this.layout.minX, this.layout.maxX);
+      if (tornadoCarried) this.updateTornadoCarry(dtMs);
       this.updateDeathSequence(enemy, dtMs);
     }
 
@@ -1464,8 +1485,29 @@ export class GameEngine {
       if (ms > 0) this.superpowerCooldowns.set(id, Math.max(0, ms - dtMs));
     }
 
-    if (enemy?.deathPhase === 'done' && !this.levelWonHandled) {
-      this.handleEnemyDefeated(enemy);
+    if (enemy?.deathPhase === 'done' && !this.levelWonHandled && this.celebratingEnemy !== enemy) {
+      if (enemy.kind === 'boss') {
+        this.handleEnemyDefeated(enemy);
+      } else {
+        // Point 2: the enemy has finished falling/lying/fading — give the
+        // player a short, real celebration beat (fist-pump taunt pose) that
+        // actually registers the kill before the level moves on.
+        this.celebratingEnemy = enemy;
+        this.celebrationTimerMs = 2600;
+        player.setAnim('taunt', true);
+        player.hitstunRemainingMs = Math.max(player.hitstunRemainingMs, this.celebrationTimerMs);
+        player.body.vel.x = 0;
+        audio.play('victory');
+        this.showToast('SIEG!', this.celebrationTimerMs);
+      }
+    }
+    if (this.celebratingEnemy) {
+      this.celebrationTimerMs -= dtMs;
+      if (this.celebrationTimerMs <= 0) {
+        const defeated = this.celebratingEnemy;
+        this.celebratingEnemy = null;
+        this.handleEnemyDefeated(defeated);
+      }
     }
     if (player.deathPhase === 'done' && this.phase === 'playing') {
       this.handlePlayerDefeated();
@@ -1726,7 +1768,19 @@ export class GameEngine {
     switch (f.deathPhase) {
       case 'falling':
         f.deathTimerMs -= dtMs;
-        if (f.deathTimerMs <= 0 || (f.body.grounded && Math.abs(f.body.vel.x) < 10)) {
+        // Root-cause fix (gameplay/animation pass): this used to also flip
+        // to 'lying' once the timer ran out, even if the body was still
+        // airborne (e.g. a critical-hit launch that takes longer than the
+        // timer to actually land) — that rendered the "lying"/"fallen" pose
+        // while the fighter still floated above groundY, reading as
+        // "hanging in the air." The real ground contact (body.grounded) is
+        // now the only real trigger; the timer is just a stuck-body
+        // failsafe (e.g. wedged at an arena wall) that waits far longer.
+        if (f.body.grounded && Math.abs(f.body.vel.x) < 10) {
+          f.deathPhase = 'lying';
+          f.deathTimerMs = 650;
+          f.setAnim('fallen', true);
+        } else if (f.deathTimerMs <= -3500) {
           f.deathPhase = 'lying';
           f.deathTimerMs = 650;
           f.setAnim('fallen', true);
@@ -1750,6 +1804,59 @@ export class GameEngine {
         break;
       default:
         break;
+    }
+  }
+
+  // Point 12/14: kicks off the real lift once the growing funnel visually
+  // reaches the enemy (called from fireSuperpowerVisual's 'tornado' case,
+  // not immediately on button press) — a strong upward launch via the
+  // normal physics body plus an orbiting x-position for updateTornadoCarry
+  // to drive each frame, so gravity genuinely brings them back down rather
+  // than the position being snapped.
+  private beginTornadoLift(): void {
+    const enemy = this.enemy;
+    if (!enemy || enemy.isDead) return;
+    if (enemy.kind === 'boss') {
+      // Point 15: bosses resist the full lift — a firm push-back instead.
+      const dir = Math.sign(enemy.body.pos.x - this.player.body.pos.x) || this.player.facing;
+      applyKnockback(enemy.body, dir, 260, 0.22);
+      enemy.setAnim('stagger', true);
+      enemy.hitstunRemainingMs = Math.max(enemy.hitstunRemainingMs, 500);
+      this.shake.add(0.35);
+      return;
+    }
+    this.tornadoCarry = { target: enemy, ageMs: 0, totalMs: 950, centerX: enemy.body.pos.x };
+    enemy.body.vel.y = -780;
+    enemy.body.vel.x = 0;
+    enemy.body.grounded = false;
+    enemy.setAnim('knockback', true);
+    enemy.hitstunRemainingMs = 1500;
+    this.shake.add(0.5);
+    audio.vibrate([20, 30, 60]);
+  }
+
+  private updateTornadoCarry(dtMs: number): void {
+    const carry = this.tornadoCarry;
+    if (!carry) return;
+    carry.ageMs += dtMs;
+    const t = Math.min(1, carry.ageMs / carry.totalMs);
+    const spins = 2.5;
+    const radius = 22 * Math.sin(Math.PI * Math.min(1, t * 1.15));
+    const angle = t * spins * Math.PI * 2;
+    const orbitedX = carry.centerX + Math.cos(angle) * radius;
+    carry.target.body.pos.x = Math.max(this.layout.minX + 20, Math.min(this.layout.maxX - 20, orbitedX));
+    if (carry.target.body.grounded || t >= 1) {
+      this.tornadoCarry = null;
+      if (carry.target.body.grounded && !carry.target.isDead) {
+        // Point 14: a clear, real landing beat, not a silent stop — 'stagger'
+        // (not 'fallen', which is the death-only lying pose and would never
+        // get reset back to idle by the normal AI branch below) so control
+        // hands back cleanly once hitstun expires.
+        carry.target.setAnim('stagger', true);
+        carry.target.hitstunRemainingMs = Math.max(carry.target.hitstunRemainingMs, 500);
+        this.particles.burst(carry.target.body.pos, 10, { color: '#c9b28a', shape: 'dust', size: 6, life: 0.4, maxLife: 0.4, gravity: 150 });
+        this.shake.add(0.3);
+      }
     }
   }
 
@@ -2355,19 +2462,29 @@ export class GameEngine {
         break;
       }
       case 'ice': {
-        // Movement-quality pass 3: a real stream of angular ice crystals
-        // (see ParticleSystem's 'shard' case) instead of a plain blue
-        // circle/cloud — a tight, fast, reaching jet reads as a frost beam,
-        // with a thin trailing mist as a minor supporting accent only.
-        this.particles.burstDirectional({ x: originX, y: originY }, 16, dirAngle, 0.22, {
-          color: '#81d4fa', shape: 'shard', size: 9, life: 0.55, maxLife: 0.55, gravity: 10, rotSpeed: 6,
-        });
-        this.particles.burstDirectional({ x: originX, y: originY }, 8, dirAngle, 0.22, {
-          color: '#e1f5fe', shape: 'shard', size: 5, life: 0.45, maxLife: 0.45, gravity: 10, rotSpeed: -5,
-        });
-        this.particles.burstDirectional({ x: originX, y: originY }, 6, dirAngle, 0.6, {
-          color: '#b3e5fc', shape: 'cloud', size: 4, life: 0.5, maxLife: 0.5, gravity: -10,
-        });
+        // Snow-cannon rework (point 10): "❄️ SCHNEE-KANONEN-FURZ" — a real
+        // blast of snow + ice crystals that travels the gap to the enemy in
+        // waves (same traveling-wave approach as chili's flame) and widens
+        // as it nears them, so the impact reads as a real snow blast
+        // burying them rather than a thin frost beam.
+        const targetDist = this.enemy
+          ? Math.min(260, Math.max(60, distance({ x: originX, y: originY }, this.enemy.body.pos)))
+          : 130;
+        const waveCount = 5;
+        for (let wave = 0; wave < waveCount; wave++) {
+          window.setTimeout(() => {
+            const reach = (targetDist * (wave + 1)) / waveCount;
+            const wx = originX + Math.cos(dirAngle) * reach;
+            const wy = originY + Math.sin(dirAngle) * reach;
+            const spread = 0.26 + wave * 0.14;
+            this.particles.burstDirectional({ x: wx, y: wy }, 11, dirAngle, spread, {
+              color: wave % 2 === 0 ? '#ffffff' : '#e1f5fe', shape: 'dust', size: 15 - wave, life: 0.6, maxLife: 0.6, gravity: 60,
+            });
+            this.particles.burstDirectional({ x: wx, y: wy }, 5, dirAngle, spread, {
+              color: '#81d4fa', shape: 'shard', size: 8, life: 0.5, maxLife: 0.5, gravity: 20, rotSpeed: 5,
+            });
+          }, wave * 70);
+        }
         break;
       }
       case 'electro':
@@ -2375,11 +2492,50 @@ export class GameEngine {
           color: '#ffeb3b', shape: 'spark', size: 10, life: 0.28, maxLife: 0.28, gravity: 0,
         });
         break;
-      case 'tornado':
-        this.particles.burst({ x: originX, y: originY }, 16, {
-          color: '#cfd8dc', shape: 'dust', size: 7, life: 0.5, maxLife: 0.5, gravity: 0,
-        });
+      case 'tornado': {
+        // Whirlwind-Furz full rework (points 12-15): a genuinely visible,
+        // growing, rotating funnel that travels from the character to the
+        // enemy over several beats — dense spiralling dust/debris at
+        // multiple heights and an increasing radius/rotation speed as it
+        // advances, so it reads as an actual small tornado rather than a
+        // sparse puff of dots. The physical lift only fires once it
+        // actually arrives (beginTornadoLift), not immediately.
+        const startX = originX;
+        const startY = this.layout.groundY - 4;
+        const endX = this.enemy ? this.enemy.body.pos.x : originX + Math.cos(dirAngle) * 220;
+        const stepCount = 13;
+        const totalMs = 900;
+        const debrisColors = ['#8d6e63', '#cfd8dc', '#aed581', '#a1887f'];
+        for (let step = 0; step <= stepCount; step++) {
+          window.setTimeout(() => {
+            const t = step / stepCount;
+            const cx = startX + (endX - startX) * t;
+            const radius = 16 + t * 42; // visibly grows larger as it approaches
+            const spins = 4;
+            // Several stacked rings at different heights so the funnel
+            // reads as a real column with volume, not a flat ring of dots.
+            const bands = 4;
+            for (let band = 0; band < bands; band++) {
+              const bandFrac = band / (bands - 1);
+              const bandRadius = radius * (0.45 + bandFrac * 0.55);
+              const bandY = startY - bandFrac * (34 + t * 26);
+              const ringParticles = 6 + Math.round(bandFrac * 4);
+              for (let r = 0; r < ringParticles; r++) {
+                const a = (r / ringParticles) * Math.PI * 2 + t * spins * Math.PI * 2 + band * 0.6;
+                const px = cx + Math.cos(a) * bandRadius;
+                const py = bandY - Math.abs(Math.sin(a)) * bandRadius * 0.35;
+                this.particles.burst({ x: px, y: py }, 1, {
+                  color: debrisColors[(r + band) % debrisColors.length],
+                  shape: (r + band) % 4 === 0 ? 'spark' : 'dust',
+                  size: 7 + radius * 0.24, life: 0.5, maxLife: 0.5, gravity: -25,
+                });
+              }
+            }
+            if (step === stepCount) this.beginTornadoLift();
+          }, (step / stepCount) * totalMs);
+        }
         break;
+      }
       case 'nuclear':
         this.particles.burst({ x: originX, y: originY }, 10, {
           color: '#ff8a65', shape: 'spark', size: 8, life: 0.5, maxLife: 0.5, gravity: -100,

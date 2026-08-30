@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { CapeColorId, CharacterId, SpecialWeaponId, SuperpowerId, WeaponId } from '../game/types';
-import { loadSaveData, saveSaveData, type SaveData } from '../storage/saveData';
+import { defaultSaveData, loadSaveData, saveSaveData, type SaveData } from '../storage/saveData';
 import { getUnlockedSuperpowers } from '../data/superpowers';
 import { SPECIAL_WEAPONS } from '../data/specialWeapons';
 import { CAPE_COLORS, CHARACTERS } from '../data/characters';
@@ -51,6 +51,7 @@ interface AppState {
   purchaseCharacter: (id: CharacterId) => boolean;
   equipCapeColor: (id: CapeColorId) => void;
   purchaseCapeColor: (id: CapeColorId) => boolean;
+  resetAllProgress: () => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -86,10 +87,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     save.highestLevelReached = 1;
     save.unlockedWeapons = ['fists'];
-    save.unlockedSuperpowers = [];
-    save.equippedSuperpowerSlots = [null, null, null];
     save.totalKills = 0;
-    save.bossesDefeated = [];
     save.bonusWeaponMilestonesClaimed = [];
     save.storkBonusMilestonesClaimed = [];
     // Persistent-progression pass: deliberately NOT touched here — coins
@@ -99,7 +97,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     // coins. Character-system overhaul: selectedCharacter/unlockedCharacters/
     // equippedCapeColor/unlockedCapeColors are equally permanent cosmetic
     // progression — a Game Over never un-picks your hero or re-locks a
-    // bought cape color.
+    // bought cape color. Reward-pacing pass (point 32): bossesDefeated/
+    // unlockedSuperpowers/equippedSuperpowerSlots joined this permanent
+    // layer too — a special ability earned from a boss is a real milestone
+    // reward and must never be taken away by a later Game Over.
     saveSaveData(save);
     set({ save, lastRunSummary: summary, screen: 'gameOver' });
   },
@@ -118,17 +119,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     save.totalKills += 1;
     if (bossId && !save.bossesDefeated.includes(bossId)) {
       save.bossesDefeated = [...save.bossesDefeated, bossId];
-    }
-    const unlocked = getUnlockedSuperpowers(save.totalKills);
-    const newlyUnlocked = unlocked.filter((id) => !save.unlockedSuperpowers.includes(id));
-    if (newlyUnlocked.length > 0) {
-      save.unlockedSuperpowers = unlocked;
-      const slots = [...save.equippedSuperpowerSlots];
-      for (const id of newlyUnlocked) {
-        const freeIdx = slots.findIndex((s) => s === null);
-        if (freeIdx !== -1) slots[freeIdx] = id;
+      // Reward-pacing pass (points 31/32): a new superpower is only ever
+      // granted here, on an actual boss kill, and — unlike the old
+      // kill-count gate — it's now permanent (see finishRun, which no
+      // longer clears bossesDefeated/unlockedSuperpowers on Game Over).
+      const unlocked = getUnlockedSuperpowers(save.bossesDefeated);
+      const newlyUnlocked = unlocked.filter((id) => !save.unlockedSuperpowers.includes(id));
+      if (newlyUnlocked.length > 0) {
+        save.unlockedSuperpowers = unlocked;
+        const slots = [...save.equippedSuperpowerSlots];
+        for (const id of newlyUnlocked) {
+          const freeIdx = slots.findIndex((s) => s === null);
+          if (freeIdx !== -1) slots[freeIdx] = id;
+        }
+        save.equippedSuperpowerSlots = slots;
       }
-      save.equippedSuperpowerSlots = slots;
     }
     saveSaveData(save);
     set({ save });
@@ -277,5 +282,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     saveSaveData(next);
     set({ save: next });
     return true;
+  },
+
+  // Point 25-27: a genuine complete reset — every unlock, every piece of
+  // progress, back to a brand-new save — EXCEPT the highscore, which is the
+  // one thing explicitly meant to survive forever. Gated behind a
+  // confirmation dialog in the UI (MainMenuScreen) since this is otherwise
+  // unrecoverable.
+  resetAllProgress: () => {
+    const preservedHighScore = get().save.highScore;
+    const fresh = { ...defaultSaveData(), highScore: preservedHighScore };
+    saveSaveData(fresh);
+    set({ save: fresh, screen: 'mainMenu' });
   },
 }));

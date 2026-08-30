@@ -1,5 +1,6 @@
 import { useAppStore } from '../state/appStore';
-import { SUPERPOWER_LIST } from '../data/superpowers';
+import { SUPERPOWER_LIST, unlockBossName } from '../data/superpowers';
+import { BOSSES } from '../data/bosses';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { BALANCE } from '../data/balance';
 
@@ -47,7 +48,12 @@ export function SuperpowersScreen() {
             >
               <div style={{ fontSize: 28 }}>{unlocked ? s.icon : '🔒'}</div>
               <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 700 }}>{unlocked ? s.name : `Freischaltung bei ${s.unlockAtKills} Kills`}</div>
+                <div style={{ fontWeight: 700 }}>
+                  {unlocked ? s.name : (() => {
+                    const bossId = unlockBossName(s);
+                    return bossId ? `Freischaltung: Boss "${BOSSES[bossId].name}" besiegen` : 'Freischaltung: von Anfang an';
+                  })()}
+                </div>
                 {unlocked && <div style={{ fontSize: 12, opacity: 0.75 }}>{s.description}</div>}
               </div>
               {equipped && <div style={{ fontSize: 12, color: '#ffd54f', fontWeight: 700 }}>AKTIV</div>}

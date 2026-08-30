@@ -1,72 +1,79 @@
 import type { SuperpowerDef, SuperpowerId } from '../game/types';
+import { BOSS_ORDER } from './bosses';
 
-// Section 23-27: unlock thresholds are configurable balance data, not
-// hardcoded logic. New "Fürze" can be added here plus one renderer entry in
-// effects/superpowerEffects.ts — no engine changes required.
+// Reward-pacing pass (points 30-34): special abilities are now a curated,
+// PERMANENT progression layer — a handful of genuinely distinct "Fürze"
+// gated behind real boss-defeat milestones instead of a run-scoped kill
+// counter, so a boss fight itself is the moment that earns the reward (see
+// appStore.recordKill/finishRun and SuperpowerDef.unlockAfterBossIndex).
+// Damage rebalance pass (point 6): a special ability must clearly read as
+// "that did real damage" — noticeably more than a normal hit or even a
+// strong weapon swing — while still leaving a normal enemy able to keep
+// fighting afterward (never a one-shot kill).
 export const SUPERPOWERS: Record<SuperpowerId, SuperpowerDef> = {
   gasCloud: {
     id: 'gasCloud',
     name: 'Gaswolken-Furz',
     icon: '☁️',
-    description: 'Große Gaswolke schwächt und verlangsamt Gegner.',
-    unlockAtKills: 5,
+    description: 'Große Stinkwolke schwächt und verlangsamt den Gegner.',
+    unlockAfterBossIndex: -1,
     cooldownMs: 14000,
-    damage: 12,
+    damage: 22,
     effectDurationMs: 3500,
     color: '#8bc34a',
+  },
+  tornado: {
+    id: 'tornado',
+    name: 'Wirbelwind-Furz',
+    icon: '🌪️',
+    description: 'Ein kleiner Tornado packt den Gegner, wirbelt ihn durch die Luft und wirft ihn zu Boden.',
+    unlockAfterBossIndex: 0,
+    cooldownMs: 22000,
+    damage: 30,
+    effectDurationMs: 1400,
+    color: '#90a4ae',
   },
   chili: {
     id: 'chili',
     name: 'Chili-Furz',
     icon: '🌶️',
-    description: 'Feuerwelle verursacht Schaden über Zeit.',
-    unlockAtKills: 10,
+    description: 'Feuerstoß verursacht hohen Schaden über Zeit.',
+    unlockAfterBossIndex: 1,
     cooldownMs: 16000,
-    damage: 8,
+    damage: 26,
     effectDurationMs: 4000,
     color: '#e64a19',
   },
   ice: {
     id: 'ice',
-    name: 'Eis-Furz',
-    icon: '🧊',
-    description: 'Friert den Gegner kurz ein.',
-    unlockAtKills: 20,
+    name: 'Schnee-Kanonen-Furz',
+    icon: '❄️',
+    description: 'Begräbt den Gegner unter einem Schneehaufen und friert ihn kurz ein.',
+    unlockAfterBossIndex: 2,
     cooldownMs: 18000,
-    damage: 10,
-    effectDurationMs: 2200,
+    damage: 20,
+    effectDurationMs: 2600,
     color: '#4fc3f7',
   },
   electro: {
     id: 'electro',
-    name: 'Elektro-Furz',
+    name: 'Blitz-Furz',
     icon: '⚡',
-    description: 'Lähmt den Gegner kurzzeitig.',
-    unlockAtKills: 35,
+    description: 'Lähmt den Gegner kurzzeitig mit einem Stromschlag.',
+    unlockAfterBossIndex: 3,
     cooldownMs: 20000,
-    damage: 18,
+    damage: 32,
     effectDurationMs: 1800,
     color: '#ffeb3b',
   },
-  tornado: {
-    id: 'tornado',
-    name: 'Tornado-Furz',
-    icon: '🌪️',
-    description: 'Schleudert den Gegner durch die Arena.',
-    unlockAtKills: 50,
-    cooldownMs: 22000,
-    damage: 22,
-    effectDurationMs: 1200,
-    color: '#90a4ae',
-  },
   nuclear: {
     id: 'nuclear',
-    name: 'Nuklear-Furz',
+    name: 'Druckwellen-Furz',
     icon: '💥',
-    description: 'Riesige Druckwelle, sehr hoher Schaden. Selten.',
-    unlockAtKills: 100,
+    description: 'Gewaltige Druckwelle, sehr hoher Schaden. Selten einsetzbar.',
+    unlockAfterBossIndex: 4,
     cooldownMs: 40000,
-    damage: 55,
+    damage: 48,
     effectDurationMs: 800,
     color: '#ab47bc',
   },
@@ -74,6 +81,21 @@ export const SUPERPOWERS: Record<SuperpowerId, SuperpowerDef> = {
 
 export const SUPERPOWER_LIST = Object.values(SUPERPOWERS);
 
-export function getUnlockedSuperpowers(totalKills: number): SuperpowerId[] {
-  return SUPERPOWER_LIST.filter((s) => totalKills >= s.unlockAtKills).map((s) => s.id);
+/** Which boss (by name) unlocks a given ability, for display purposes —
+ * null for the always-available starter ability. */
+export function unlockBossName(def: SuperpowerDef): string | null {
+  if (def.unlockAfterBossIndex < 0) return null;
+  return BOSS_ORDER[def.unlockAfterBossIndex] ?? null;
+}
+
+/** Permanent unlock set derived from every boss ever defeated (lifetime,
+ * never reset by a Game Over — see appStore) rather than from run-scoped
+ * kill counts. */
+export function getUnlockedSuperpowers(bossesDefeated: string[]): SuperpowerId[] {
+  const defeatedIndices = new Set(
+    bossesDefeated.map((id) => BOSS_ORDER.indexOf(id)).filter((i) => i >= 0),
+  );
+  return SUPERPOWER_LIST
+    .filter((s) => s.unlockAfterBossIndex < 0 || defeatedIndices.has(s.unlockAfterBossIndex))
+    .map((s) => s.id);
 }

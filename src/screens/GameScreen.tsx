@@ -67,11 +67,14 @@ export function GameScreen() {
           } else if (nextStage) {
             setStage(nextStage);
           } else {
-            // Not every win needs a new item — briefly acknowledge the
-            // victory (see the engine's "SIEG!" toast) and continue on.
+            // Not every win needs a new item — the engine's own post-kill
+            // celebration beat (GameEngine.celebrationTimerMs) already gave
+            // the player a real ~2.5s "I just won that" pause for normal
+            // kills before phase even reached 'levelWon'; this is just a
+            // short confirming beat before continuing on.
             autoAdvanceTimeout.current = window.setTimeout(() => {
               if (engine.phase === 'levelWon') engine.proceedToNextLevel();
-            }, 1300);
+            }, 700);
           }
         }
       }

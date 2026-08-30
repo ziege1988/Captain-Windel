@@ -39,18 +39,6 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     staggerChance: 0.22,
     color: '#5c3a21',
   },
-  frypan: {
-    id: 'frypan',
-    name: 'Bratpfanne',
-    description: 'DONG! Hoher Betäubungswert, mittlere Reichweite.',
-    shape: 'melee',
-    range: 60,
-    damageMult: 1.3,
-    attackSpeedMult: 0.9,
-    knockback: 150,
-    staggerChance: 0.35,
-    color: '#8a8a8a',
-  },
   boxingGloves: {
     id: 'boxingGloves',
     name: 'Boxhandschuhe',

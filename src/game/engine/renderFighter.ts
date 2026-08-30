@@ -330,7 +330,7 @@ function computeAttackPose(f: Fighter, t: number): Pose {
 }
 
 function computeSwingAttack(t: number, weaponId: Fighter['weaponId']): Pose {
-  const heavy = weaponId === 'axe' || weaponId === 'club' || weaponId === 'frypan';
+  const heavy = weaponId === 'axe' || weaponId === 'club';
   const windupEnd = heavy ? 0.13 : 0.1;
   const strikeEnd = heavy ? 0.28 : 0.22;
   const followEnd = heavy ? 0.42 : 0.36;
@@ -856,8 +856,8 @@ function drawArm(
 }
 
 // Section (polish pass): weapons used to render as one undifferentiated
-// line (plus a circle for the frypan) at a fixed angle unrelated to the
-// arm — every weapon looked the same and could visibly clip through the
+// line at a fixed angle unrelated to the arm — every weapon looked the
+// same and could visibly clip through the
 // arm whenever the arm pose changed. Each weapon now gets its own
 // recognizable silhouette, drawn rotated to the actual shoulder->hand
 // direction so it always extends naturally out of the hand instead of
@@ -941,27 +941,6 @@ export function drawWeaponInHand(ctx: CanvasRenderingContext2D, f: Fighter, hand
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.arc(28, 0, 5, 0, Math.PI * 2);
-      ctx.stroke();
-      break;
-    }
-    case 'frypan': {
-      ctx.strokeStyle = '#3a3a3a';
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.moveTo(-6, 0);
-      ctx.lineTo(18, 0);
-      ctx.stroke();
-      ctx.fillStyle = weapon.color;
-      ctx.beginPath();
-      ctx.arc(28, 0, 11, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = '#5a5a5a';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(25, -3, 6, Math.PI * 1.1, Math.PI * 1.7);
       ctx.stroke();
       break;
     }
@@ -1712,30 +1691,73 @@ function drawCirclingBirds(ctx: CanvasRenderingContext2D, f: Fighter, shoulderY:
   ctx.restore();
 }
 
+// Gameplay/animation pass (point 10/11): the Ice-Furz is now a
+// "Schnee-Kanonen-Furz" — the hit enemy must visibly stick out of a real
+// snow pile (only head/hands showing), not just wear a translucent blue
+// tint. Drawn as a lumpy mound of overlapping white drifts from the feet up
+// to roughly chest height (well below shoulderY, so the head always stays
+// clear), with a couple of embedded ice-crystal shards, a constant small
+// shiver, and a few drifting snowflakes above — and it fades out over its
+// last ~450ms instead of just vanishing, reading as the pile settling/
+// collapsing rather than a hard cut.
+export function drawSnowPile(ctx: CanvasRenderingContext2D, remainingMs: number, shoulderY: number, hipY: number, t: number): void {
+  const fadeOut = Math.min(1, remainingMs / 450);
+  const shiver = Math.sin(t * 26) * 1.4;
+  const moundTop = hipY - 30; // stays well clear of the head/shoulders
+  const moundBottom = hipY + 46;
+  ctx.save();
+  ctx.globalAlpha = 0.92 * fadeOut;
+  ctx.translate(shiver, 0);
+  ctx.fillStyle = '#f4fbff';
+  ctx.strokeStyle = '#cfeeff';
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(-19, moundBottom);
+  // Lumpy drift silhouette — several overlapping humps instead of one
+  // smooth blob, so it reads as piled snow rather than a solid ice block.
+  ctx.bezierCurveTo(-20, moundTop + 14, -14, moundTop - 2, -6, moundTop + 6);
+  ctx.bezierCurveTo(-2, moundTop - 8, 4, moundTop - 6, 7, moundTop + 4);
+  ctx.bezierCurveTo(13, moundTop - 4, 19, moundTop + 10, 19, moundTop + 16);
+  ctx.lineTo(21, moundBottom);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // A couple of embedded ice-crystal shards poking out of the pile.
+  ctx.fillStyle = 'rgba(179,229,252,0.85)';
+  for (const [sx, sy, r] of [[-10, moundTop + 10, 5], [9, moundTop + 6, 6]] as const) {
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const rr = i % 2 === 0 ? r : r * 0.5;
+      const px = sx + Math.cos(a) * rr;
+      const py = sy + Math.sin(a) * rr;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Drifting snowflakes above the pile.
+  ctx.fillStyle = `rgba(255,255,255,${0.85 * fadeOut})`;
+  for (let i = 0; i < 4; i++) {
+    const cycle = ((t * 0.5 + i * 0.27) % 1);
+    const fx = -14 + i * 9 + Math.sin(t * 2 + i) * 3;
+    const fy = shoulderY - 4 + cycle * (moundTop - shoulderY + 20);
+    ctx.beginPath();
+    ctx.arc(fx, fy, 1.6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 function drawStatusOverlay(ctx: CanvasRenderingContext2D, f: Fighter, shoulderY: number, hipY: number): void {
   const s = f.status;
   const t = f.animTimeMs / 1000;
   if (f.dazedUntilMs > 0) {
     drawCirclingBirds(ctx, f, shoulderY);
   } else if (s.frozenUntilMs > 0) {
-    ctx.save();
-    ctx.globalAlpha = 0.4;
-    ctx.fillStyle = '#b3e5fc';
-    ctx.beginPath();
-    ctx.roundRect(-13, shoulderY - 2, 26, hipY - shoulderY + 44, 8);
-    ctx.fill();
-    ctx.globalAlpha = 0.75;
-    ctx.strokeStyle = '#e1f5fe';
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-    ctx.fillStyle = '#ffffff';
-    for (let i = 0; i < 3; i++) {
-      const a = t * 1.6 + i * 2.1;
-      ctx.beginPath();
-      ctx.arc(Math.cos(a) * 9, shoulderY + 8 + i * 14, 1.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
+    drawSnowPile(ctx, s.frozenUntilMs, shoulderY, hipY, t);
   } else if (s.stunnedUntilMs > 0) {
     ctx.save();
     ctx.strokeStyle = '#ffd600';

@@ -22,7 +22,7 @@ export function Hud({ hud, onPause }: Props) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
           <div style={{ flex: 1 }}>
             <div style={nameLabelStyle}>Captain Windel</div>
-            <HealthBar pct={playerPct} color="#4caf50" critical={playerCritical} />
+            <CombatHealthHearts pct={playerPct} critical={playerCritical} />
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, pointerEvents: 'auto' }}>
@@ -91,6 +91,36 @@ function HealthBar({
         animation: critical ? 'hudCriticalBlink 1.1s ease-in-out infinite' : 'none',
       }}
       />
+    </div>
+  );
+}
+
+// Gameplay pass (point 5): the player's in-combat health, shown as its own
+// discrete 5-heart row — deliberately a DIFFERENT visual (bigger, red/black
+// hearts under the player's name, left side of the HUD) from the small
+// ❤️/🖤 run-attempts row (LivesRow, centered next to the pause button) so
+// "Kampf-Lebensenergie" (this fight's HP, refills every level) is never
+// confused with "Run-Leben" (the 3 total attempts for the whole run).
+const COMBAT_HEARTS = 5;
+function CombatHealthHearts({ pct, critical }: { pct: number; critical: boolean }) {
+  return (
+    <div style={{ display: 'flex', gap: 2 }} title={`Lebensenergie: ${Math.round(pct * 100)}%`}>
+      {Array.from({ length: COMBAT_HEARTS }, (_, i) => {
+        const frac = Math.max(0, Math.min(1, pct * COMBAT_HEARTS - i));
+        return (
+          <span key={i} style={{ position: 'relative', fontSize: 16, lineHeight: 1, display: 'inline-block' }}>
+            <span style={{ opacity: 0.3 }}>🖤</span>
+            <span
+              style={{
+                position: 'absolute', left: 0, top: 0, width: `${frac * 100}%`, overflow: 'hidden', whiteSpace: 'nowrap',
+                animation: critical && frac > 0 ? 'hudCriticalBlink 1.1s ease-in-out infinite' : 'none',
+              }}
+            >
+              ❤️
+            </span>
+          </span>
+        );
+      })}
     </div>
   );
 }

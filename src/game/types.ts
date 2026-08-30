@@ -95,7 +95,6 @@ export type WeaponId =
   | 'fists'
   | 'branch'
   | 'club'
-  | 'frypan'
   | 'boxingGloves'
   | 'spear'
   | 'axe'
@@ -159,7 +158,12 @@ export interface SuperpowerDef {
   name: string;
   icon: string;
   description: string;
-  unlockAtKills: number;
+  // Reward-pacing pass (points 31/32): superpowers are now a PERMANENT
+  // progression layer tied to boss milestones, not a run-scoped kill-count
+  // grind — -1 means available from the very start, otherwise it's the
+  // 0-based index into BOSS_ORDER whose defeat unlocks this ability for
+  // good (never lost on Game Over, see appStore.finishRun/recordKill).
+  unlockAfterBossIndex: number;
   cooldownMs: number;
   damage: number;
   effectDurationMs: number; // duration of debuff on target (slow/freeze/stun/dot)

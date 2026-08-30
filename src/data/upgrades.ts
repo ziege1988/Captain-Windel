@@ -79,17 +79,6 @@ export const UPGRADES: UpgradeDef[] = [
     minLevel: 3,
   },
   {
-    id: 'frypan_upgrade',
-    name: 'Bratpfanne',
-    description: 'Neue Waffe: hoher Betäubungswert',
-    category: 'weapon',
-    weight: 6,
-    equipmentSlot: null,
-    grantsWeapon: 'frypan',
-    modifiers: {},
-    minLevel: 3,
-  },
-  {
     id: 'bow_upgrade',
     name: 'Bogen',
     description: 'Neue Waffe: Fernkampf',

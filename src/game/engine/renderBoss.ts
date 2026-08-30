@@ -1,5 +1,5 @@
 import type { Fighter } from '../entities/Fighter';
-import { drawWeaponInHand } from './renderFighter';
+import { drawWeaponInHand, drawSnowPile } from './renderFighter';
 
 // Section (boss overhaul): bosses used to be rendered through the exact
 // same thin stick-figure rig as every normal enemy, just bigger — nothing
@@ -1156,13 +1156,7 @@ function drawBossStatusOverlay(ctx: CanvasRenderingContext2D, f: Fighter, should
   if (f.dazedUntilMs > 0) {
     drawCirclingBirds(ctx, f, shoulderY);
   } else if (s.frozenUntilMs > 0) {
-    ctx.save();
-    ctx.globalAlpha = 0.35;
-    ctx.fillStyle = '#b3e5fc';
-    ctx.beginPath();
-    ctx.roundRect(-16, shoulderY - 2, 32, hipY - shoulderY + 50, 10);
-    ctx.fill();
-    ctx.restore();
+    drawSnowPile(ctx, s.frozenUntilMs, shoulderY, hipY, t);
   } else if (s.stunnedUntilMs > 0) {
     ctx.save();
     ctx.strokeStyle = '#ffd600';

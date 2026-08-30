@@ -5,7 +5,10 @@
 export const BALANCE = {
   player: {
     baseStats: {
-      maxHealth: 100,
+      // Gameplay pass (points 4/5): somewhat more combat health so a fight
+      // (and the new 5-heart HUD row) has real room to play out over
+      // several exchanges, without being a health-inflation grind.
+      maxHealth: 135,
       // Slight edge over the level-1 enemy (section 11: "Captain Windel
       // soll am Anfang einen Vorteil haben. Nicht extrem.").
       meleeDamage: 14,

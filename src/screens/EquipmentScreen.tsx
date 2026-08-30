@@ -1,7 +1,8 @@
 import type { CSSProperties } from 'react';
 import { useAppStore } from '../state/appStore';
 import { WEAPON_LIST } from '../data/weapons';
-import { SUPERPOWER_LIST } from '../data/superpowers';
+import { SUPERPOWER_LIST, unlockBossName } from '../data/superpowers';
+import { BOSSES } from '../data/bosses';
 import { ScreenHeader } from '../components/ScreenHeader';
 
 // Section 42: unlocked weapons/superpowers shown normally, locked ones as
@@ -37,7 +38,10 @@ export function EquipmentScreen() {
               <div style={{ fontSize: 22 }}>{unlocked ? s.icon : '🔒'}</div>
               <div style={{ fontWeight: 700, fontSize: 13 }}>{unlocked ? s.name : '???'}</div>
               <div style={{ fontSize: 11, opacity: 0.75 }}>
-                {unlocked ? s.description : `Freischaltung bei ${s.unlockAtKills} Kills`}
+                {unlocked ? s.description : (() => {
+                  const bossId = unlockBossName(s);
+                  return bossId ? `Freischaltung: Boss "${BOSSES[bossId].name}" besiegen` : 'Freischaltung: von Anfang an';
+                })()}
               </div>
             </div>
           );
