@@ -15,7 +15,13 @@ interface Pose {
   legBackX: number; legBackY: number;
   capeKick: number; // extra upward/outward cape flare 0..1
   flatten: number; // 0..1, 1 = lying on the ground
-  turnedAway: number; // 0..1, 1 = facing away from camera (fart pose)
+  turnFlip: number; // 0..1, 1 = fully turned to face away from the camera (fart/chili/ice pose) — drives an actual mirror-flip in renderFighter, not just a face fade
+  // Movement-quality pass 3 (root-cause fix): the shoulder anchor used to be
+  // a fixed height no pose could ever move, so any pose that lowered the
+  // hip (a crouch/bend) stretched the torso segment longer instead of the
+  // whole upper body sinking with it. This offsets the shoulder to move
+  // together with a crouch, keeping the torso a believable constant length.
+  shoulderDrop: number;
   // Character/movement-quality pass: knee/elbow bend used to be one fixed
   // constant (0.16) for every pose, so a leg mid-stride and a leg planted
   // flat on the ground bent by exactly the same amount — a big part of why
@@ -30,7 +36,7 @@ const STAND: Pose = {
   bodyLean: 0, hipY: 0, headOffsetX: 0, headOffsetY: 0,
   armFrontX: 6, armFrontY: 26, armBackX: -6, armBackY: 26,
   legFrontX: 8, legFrontY: 40, legBackX: -8, legBackY: 40,
-  capeKick: 0, flatten: 0, turnedAway: 0,
+  capeKick: 0, flatten: 0, turnFlip: 0, shoulderDrop: 0,
   bendFront: 0.16, bendBack: 0.16,
 };
 
@@ -216,60 +222,57 @@ function computePose(f: Fighter): Pose {
       return { ...STAND, bodyLean: 0.5, hipY: 4, armFrontX: 14, armFrontY: 30, armBackX: 12, armBackY: 32, headOffsetY: 10 };
     case 'superpower':
     case 'fart': {
-      // Section (quality pass): four clearly readable beats, slower overall
-      // than before so the bend genuinely reads as a body movement rather
-      // than a pose-swap — stand -> brief announce -> a real, visible
-      // forward bend (torso leans, hips crouch low, the character turns so
-      // the rear faces the enemy) -> a short held beat right as the gas/
-      // fire actually releases -> standing back up. Timed so GameEngine's
-      // actual payload (fired at 0.6s, see useSuperpower) lands inside the
-      // held-release beat, not before the bend has actually completed.
-      const announceEnd = 0.18;
-      const bendEnd = 0.5;
-      const releaseEnd = 0.68;
-      const totalEnd = 1.0;
-      let turned: number, crouch: number, cape: number, lean: number, armX: number, armY: number;
-      if (t < announceEnd) {
-        const p = t / announceEnd;
-        // A brief announcing flinch (quick backward lean) before the body
-        // actually starts bending — "press button -> character performs a
-        // matching movement" rather than snapping straight into the crouch.
-        const flinch = Math.sin(p * Math.PI) * 0.14;
-        turned = p * 0.2;
-        crouch = p * 2;
-        cape = 0;
-        lean = p * 0.1 - flinch;
-        armX = -6 * p;
-        armY = 26 - 4 * p;
+      // Movement-quality pass 3 (root-cause fix): the previous version only
+      // faded the face out and stretched the torso by dropping the hip
+      // while the shoulder anchor stayed fixed — no actual turn, and the
+      // "bend" read as the body being pulled longer rather than a real
+      // hip-hinge crouch. This is a genuine five-beat sequence: glance ->
+      // an actual 180° turn (mirror-flip via turnFlip, applied once in
+      // renderFighter's main transform, not a fade) -> a real bend where
+      // hip *and* shoulder drop together (shoulderDrop) so the torso keeps
+      // a believable length while the whole upper body sinks and leans ->
+      // a held release beat (GameEngine's actual gas/fire payload timing
+      // targets the middle of this window) -> standing back up while
+      // turning back to face the enemy.
+      const glanceEnd = 0.12;
+      const turnEnd = 0.32;
+      const bendEnd = 0.52;
+      const holdEnd = 0.85;
+      const totalEnd = 1.25;
+      let turn: number, crouch: number, shoulderDrop: number, cape: number, lean: number, armX: number, armY: number;
+      if (t < glanceEnd) {
+        const p = t / glanceEnd;
+        turn = 0; crouch = 0; shoulderDrop = 0; cape = 0; lean = 0;
+        armX = 0; armY = 26 - 2 * p;
+      } else if (t < turnEnd) {
+        const p = (t - glanceEnd) / (turnEnd - glanceEnd);
+        // The turn itself — arms flare out for balance mid-spin (peaking
+        // at the edge-on midpoint), knees already softening a touch.
+        turn = p;
+        crouch = p * 4; shoulderDrop = p * 3; cape = p * 0.3; lean = p * 0.08;
+        const flare = Math.sin(p * Math.PI);
+        armX = -14 * flare; armY = 24 - 10 * flare;
       } else if (t < bendEnd) {
-        const p = (t - announceEnd) / (bendEnd - announceEnd);
-        turned = 0.2 + p * 0.8;
-        crouch = 2 + p * 15;
-        cape = p * 0.8;
-        lean = 0.1 + p * 0.35;
-        armX = -6 - p * 12;
-        armY = 22 - p * 10;
-      } else if (t < releaseEnd) {
-        const p = (t - bendEnd) / (releaseEnd - bendEnd);
-        turned = 1;
-        crouch = 17 + Math.sin(p * Math.PI) * 2;
-        cape = 0.8 + p * 0.2;
-        lean = 0.45;
-        armX = -18;
-        armY = 12;
+        const p = (t - turnEnd) / (bendEnd - turnEnd);
+        turn = 1;
+        crouch = 4 + p * 15; shoulderDrop = 3 + p * 13; cape = 0.3 + p * 0.6; lean = 0.08 + p * 0.4;
+        armX = -14 - p * 4; armY = 14 - p * 4;
+      } else if (t < holdEnd) {
+        const p = (t - bendEnd) / (holdEnd - bendEnd);
+        turn = 1;
+        const wobble = Math.sin(p * Math.PI) * 1.5;
+        crouch = 19 + wobble; shoulderDrop = 16 + wobble * 0.6; cape = 0.9 + p * 0.1; lean = 0.48;
+        armX = -18; armY = 10;
       } else {
-        const p = Math.min(1, (t - releaseEnd) / (totalEnd - releaseEnd));
-        turned = 1 - p * 0.6;
-        crouch = 17 - p * 17;
-        cape = 1 - p * 0.7;
-        lean = 0.45 - p * 0.45;
-        armX = -18 + p * 24;
-        armY = 12 + p * 14;
+        const p = Math.min(1, (t - holdEnd) / (totalEnd - holdEnd));
+        turn = 1 - p;
+        crouch = 19 - p * 19; shoulderDrop = 16 - p * 16; cape = 1 - p * 0.75; lean = 0.48 - p * 0.48;
+        armX = -18 + p * 24; armY = 10 + p * 16;
       }
       return {
-        ...STAND, turnedAway: turned, bodyLean: lean, hipY: crouch,
+        ...STAND, turnFlip: turn, bodyLean: lean, hipY: crouch, shoulderDrop,
         armFrontX: armX, armFrontY: armY, armBackX: armX, armBackY: armY,
-        capeKick: cape,
+        capeKick: cape, bendFront: 0.16 + crouch * 0.012, bendBack: 0.16 + crouch * 0.012,
       };
     }
     case 'taunt': {
@@ -720,9 +723,17 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
       : (-lowestFootLocalY(f, pose) + FOOT_SAFETY_EMBED) * scale)
     : 0;
 
+  // Movement-quality pass 3: a real 180° turn (fart/chili/ice) — a single
+  // extra horizontal-scale factor riding the same transform everything else
+  // draws through, so the whole figure (limbs, torso, cape, hair, face)
+  // spins together as one silhouette instead of the old fade-only fake.
+  // cos() sweeps 1 -> 0 (edge-on, briefly a thin sliver — the classic
+  // cartoon "quick spin" beat) -> -1 (fully turned) as turnFlip goes 0..1.
+  const turnMirror = Math.cos(pose.turnFlip * Math.PI);
+
   ctx.save();
   ctx.translate(x, groundY - airLift + groundEmbed);
-  ctx.scale(f.facing * scale, scale);
+  ctx.scale(f.facing * scale * turnMirror, scale);
 
   if (pose.flatten > 0.5) {
     ctx.rotate(Math.PI / 2);
@@ -737,13 +748,18 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   // (normal enemies, bosses render through renderBoss.ts) uses the
   // original slim proportions untouched.
   const charDef = f.kind === 'player' ? CHARACTERS[f.characterId] : null;
-  const bw = charDef?.build === 'heavy' ? 1.55 : 1; // body-width multiplier
+  const bw = charDef?.build === 'heavy' ? 2.1 : 1; // body-width multiplier — bumped up alongside the new, much thinner base widths so Bruno still reads as convincingly bigger, not just proportionally-thin like everyone else
   const headMult = charDef?.build === 'heavy' ? 1.22 : 1;
 
-  const headR = 12 * headMult;
+  // Filigree-stick-figure pass: a proportionally larger head over a much
+  // thinner body (torso/limb widths below), plus a visible thin neck gap
+  // (was headR-2, i.e. the head visually merged straight into the torso's
+  // own rounded shoulder cap with no neck at all) so the silhouette reads
+  // as a fine comic stick figure rather than a solid blob with a head.
+  const headR = 13 * headMult;
   const hipY = -f.height * 0.45 + pose.hipY;
-  const shoulderY = -f.height * 0.78;
-  const headY = shoulderY - headR - 2 + pose.headOffsetY;
+  const shoulderY = -f.height * 0.78 + pose.shoulderDrop;
+  const headY = shoulderY - headR - 6 + pose.headOffsetY;
   const headX = pose.headOffsetX;
 
   ctx.lineCap = 'round';
@@ -757,15 +773,17 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   // now comes from the pose itself (deeper mid-stride) instead of one
   // fixed constant for every pose.
   const shoeStyle = resolveShoeStyle(f);
-  drawLimb(ctx, 0, hipY, pose.legBackX, hipY + pose.legBackY, 7.5 * bw, 5.5 * bw, pose.bendBack, -1, f.color);
+  drawLimb(ctx, 0, hipY, pose.legBackX, hipY + pose.legBackY, 3.6 * bw, 2.6 * bw, pose.bendBack, -1, f.color);
   drawShoe(ctx, pose.legBackX, hipY + pose.legBackY, footTiltAngle(pose.legBackX, pose.legBackY), shoeStyle);
-  drawLimb(ctx, 0, hipY, pose.legFrontX, hipY + pose.legFrontY, 7.5 * bw, 5.5 * bw, pose.bendFront, -1, f.color);
+  drawLimb(ctx, 0, hipY, pose.legFrontX, hipY + pose.legFrontY, 3.6 * bw, 2.6 * bw, pose.bendFront, -1, f.color);
   drawShoe(ctx, pose.legFrontX, hipY + pose.legFrontY, footTiltAngle(pose.legFrontX, pose.legFrontY), shoeStyle);
 
-  // Torso — tapered slightly wider at the shoulders than the hips for a
-  // heroic cartoon silhouette instead of a uniform-width wire.
+  // Torso — a slim, filigree column (much thinner than the old heavy
+  // cartoon-hero taper), with a distinct thinner neck (drawn separately
+  // below) connecting it up to the head instead of the two merging.
   const shoulderX = Math.sin(pose.bodyLean) * 10;
-  drawTaperedSegment(ctx, 0, hipY, shoulderX, shoulderY, 13 * bw, 16 * bw, f.color);
+  drawTaperedSegment(ctx, 0, hipY, shoulderX, shoulderY, 7 * bw, 8 * bw, f.color);
+  drawTaperedSegment(ctx, shoulderX, shoulderY, shoulderX + headX * 0.4, headY + headR * 0.85, 4 * bw, 3.4 * bw, f.color);
 
   // Diaper (Windelmann only) at hip.
   if (f.accessories.includes('diaper')) {
@@ -812,7 +830,7 @@ function drawArm(
   bend = 0.15, widthMult = 1,
 ): void {
   const isGlove = f.accessories.includes('gloves') || f.accessories.includes('boxingGloves');
-  const limb = drawLimb(ctx, sx, sy, sx + dx, sy + dy, 6 * widthMult, 4.5 * widthMult, bend, 1, f.color);
+  const limb = drawLimb(ctx, sx, sy, sx + dx, sy + dy, 2.8 * widthMult, 2.1 * widthMult, bend, 1, f.color);
   if (isGlove) {
     ctx.save();
     ctx.fillStyle = '#c0392b';
@@ -1376,7 +1394,7 @@ function drawPlayerFaceExtras(ctx: CanvasRenderingContext2D, def: CharacterDef, 
 }
 
 // Section (quality pass): root-cause fix, not another eye bolted on top.
-// The previous code gated drawing on `!pose.turnedAway`, but pose.turnedAway
+// The previous code gated drawing on `!pose.turnFlip`, but pose.turnFlip
 // is a smoothed *number* (0..1), not a boolean — after any fart/superpower
 // (the only anim that ever sets it above 0) the pose-smoothing lerp decays
 // it toward 0 asymptotically, so it lingers as a tiny non-zero float for a
@@ -1397,7 +1415,7 @@ function drawPlayerFaceExtras(ctx: CanvasRenderingContext2D, def: CharacterDef, 
 // determined while attacking, shocked when hit, worried at low health,
 // a mischievous grin during the superpower announce. None of this touches
 // the *eyes themselves staying correctly positioned/visible* fix below
-// (still gated on the same pose.turnedAway threshold) — it only adds
+// (still gated on the same pose.turnFlip threshold) — it only adds
 // expression on top of eyes that were already root-cause-fixed to work.
 interface FaceState {
   nextBlinkAt: number;
@@ -1476,11 +1494,11 @@ function computeExpression(f: Fighter): Expression {
 }
 
 function drawFace(ctx: CanvasRenderingContext2D, f: Fighter, hx: number, hy: number, r: number, pose: Pose, dtSec: number): void {
-  if (pose.turnedAway > 0.5) return;
+  if (pose.turnFlip > 0.5) return;
   // Fade the face out smoothly right around the turn instead of an abrupt
-  // pop, since turnedAway itself now animates continuously through the
+  // pop, since turnFlip itself now animates continuously through the
   // fart wind-up/return beats.
-  const faceAlpha = 1 - Math.max(0, (pose.turnedAway - 0.3) / 0.2);
+  const faceAlpha = 1 - Math.max(0, (pose.turnFlip - 0.3) / 0.2);
   ctx.save();
   ctx.globalAlpha *= Math.max(0, Math.min(1, faceAlpha));
 

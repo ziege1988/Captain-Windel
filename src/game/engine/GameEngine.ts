@@ -1151,18 +1151,19 @@ export class GameEngine {
     const def = SUPERPOWERS[id];
     this.superpowerCooldowns.set(id, def.cooldownMs);
     this.player.setAnim('fart', true);
-    // Section (quality pass): covers the full announce -> bend -> held-
-    // release -> return motion (see the 'fart' pose in renderFighter.ts,
-    // now a full 1s so the bend is slow enough to actually read) so the
-    // player isn't snapped back to idle mid-animation.
-    this.player.hitstunRemainingMs = 1000;
+    // Movement-quality pass 3: covers the full glance -> turn -> bend ->
+    // held-release -> return motion (see the 'fart' pose in
+    // renderFighter.ts, now 1.25s total) so the player isn't snapped back
+    // to idle mid-animation.
+    this.player.hitstunRemainingMs = 1250;
     audio.play('superpower');
     audio.vibrate([30, 40, 60, 40, 90]);
     this.shake.add(0.5);
 
-    // Fires right in the held-release beat of the pose (bend completes at
-    // 0.5s, release beat runs to 0.68s).
-    window.setTimeout(() => this.fireSuperpower(id), 600);
+    // Fires in the middle of the pose's held-release beat (bend completes
+    // at 0.52s, hold runs to 0.85s) — well after the turn/bend has actually
+    // finished, never before.
+    window.setTimeout(() => this.fireSuperpower(id), 680);
   }
 
   private fireSuperpower(id: SuperpowerId): void {
@@ -1173,14 +1174,14 @@ export class GameEngine {
     // specifically must never show a gas cloud, only fire. towardFacing=true
     // so the effect is clearly aimed at the enemy — the character is
     // oriented at them, not puffing off into empty space.
-    const baseShape = id === 'nuclear' ? 'ring' : id === 'chili' ? 'drop' : 'cloud';
-    const baseSizeMult = id === 'chili' ? 1.7 : 1.35;
+    const baseShape = id === 'nuclear' ? 'ring' : id === 'chili' ? 'flame' : id === 'ice' ? 'shard' : 'cloud';
+    const baseSizeMult = id === 'chili' ? 1.7 : id === 'ice' ? 1.3 : 1.35;
     this.triggerFartEffect(this.player, def.color, baseSizeMult, baseShape, true);
     const dirAngle = this.player.facing > 0 ? 0 : Math.PI;
     this.fireSuperpowerVisual(
       id,
-      this.player.body.pos.x + this.player.facing * 42,
-      this.player.body.groundY - 55,
+      this.player.body.pos.x + this.player.facing * 30,
+      this.player.body.groundY - 26 * this.player.scale,
       dirAngle,
     );
 
@@ -1207,15 +1208,24 @@ export class GameEngine {
       case 'chili':
         this.enemy.applyDot(6, def.effectDurationMs, '#ff5722');
         // Fire: a real backward flinch, not just a damage-over-time tick —
-        // the enemy visibly backs away from the flame.
+        // the enemy visibly backs away from the flame, with small residual
+        // flame-lick embers left burning on them for a moment.
         this.enemy.setAnim('knockback', true);
         this.enemy.hitstunRemainingMs = Math.max(this.enemy.hitstunRemainingMs, 320);
         applyKnockback(this.enemy.body, this.player.facing, 140, 0.35);
+        this.particles.burst({ x: this.enemy.body.pos.x, y: this.enemy.body.groundY - 40 * this.enemy.scale }, 6, {
+          color: '#ff7043', shape: 'flame', size: 7, life: 0.35, maxLife: 0.35, gravity: -60,
+        });
         break;
       case 'ice':
         this.enemy.applyFreeze(def.effectDurationMs);
         this.enemy.setAnim('hit', true);
         this.enemy.hitstunRemainingMs = Math.max(this.enemy.hitstunRemainingMs, 260);
+        // A visible little burst of ice crystals right on the enemy so the
+        // freeze reads as an actual ice impact, not just a status tint.
+        this.particles.burst({ x: this.enemy.body.pos.x, y: this.enemy.body.groundY - 40 * this.enemy.scale }, 8, {
+          color: '#b3e5fc', shape: 'shard', size: 6, life: 0.4, maxLife: 0.4, gravity: 30, rotSpeed: 4,
+        });
         break;
       case 'electro':
         this.enemy.applyStun(def.effectDurationMs);
@@ -2262,18 +2272,39 @@ export class GameEngine {
    * happens — whether it's an active superpower or a defeated fighter's
    * last breath. `sizeMult` scales the cloud (superpowers/death-fart use
    * ~1.35x, i.e. the requested +30-40%, on top of the old baseline). */
-  private triggerFartEffect(f: Fighter, color: string, sizeMult = 1, shape: 'cloud' | 'ring' | 'drop' = 'cloud', towardFacing = false): void {
+  private triggerFartEffect(f: Fighter, color: string, sizeMult = 1, shape: 'cloud' | 'ring' | 'drop' | 'flame' | 'shard' = 'cloud', towardFacing = false): void {
     // Section 7 (polish pass): active superpowers aim the effect at the
     // enemy (towardFacing=true — the character is oriented at them, so the
     // cloud/blast originates and drifts on that side), while the death-fart
     // keeps its original behind-the-back puff (towardFacing=false, default)
     // since nothing is being aimed at anyone there.
     const dir = towardFacing ? f.facing : -f.facing;
-    const originX = f.body.pos.x + dir * 42;
-    const originY = f.body.groundY - 55;
-    this.particles.burst({ x: originX, y: originY }, Math.round(16 * sizeMult), {
-      color, shape, size: 10 * sizeMult, life: 0.75, maxLife: 0.75, gravity: -35,
+    const originX = f.body.pos.x + dir * 30;
+    // Movement-quality pass 3 (root-cause fix): the gas must originate at
+    // the actual crouched hip/diaper height, not a fixed chest-level point
+    // — the old constant (-55) was tuned for a standing pose and made the
+    // cloud visibly pop out of the belly/chest instead of the butt once the
+    // character is genuinely bent over (see the 'fart' pose's shoulderDrop/
+    // hipY). Scaled by f.scale so it also holds for any non-player fighter
+    // that plays the death-fart (bosses/enemies at different sizes).
+    const originY = f.body.groundY - 26 * f.scale;
+    // Movement-quality pass 3: the burst now genuinely travels toward the
+    // enemy (a tight jet for flame/shards, a wider puffy spread for the
+    // plain gas cloud) instead of exploding evenly in every direction —
+    // "die Wolke soll vom Charakter weg zum Gegner schweben."
+    const dirAngle = dir > 0 ? 0 : Math.PI;
+    const spread = shape === 'flame' || shape === 'shard' ? 0.32 : 0.85;
+    this.particles.burstDirectional({ x: originX, y: originY }, Math.round(16 * sizeMult), dirAngle, spread, {
+      color, shape, size: 10 * sizeMult, life: 0.75, maxLife: 0.75, gravity: shape === 'cloud' ? -35 : 20,
     });
+    // A second, smaller layer of puffs at a different size so a plain gas
+    // cloud reads as several soft cloud pieces merging rather than one
+    // uniform blob.
+    if (shape === 'cloud') {
+      this.particles.burstDirectional({ x: originX, y: originY }, Math.round(9 * sizeMult), dirAngle, spread * 1.1, {
+        color, shape, size: 6 * sizeMult, life: 0.6, maxLife: 0.6, gravity: -25,
+      });
+    }
     this.spawnComicText('Faaarrt…', originX, originY - 16);
     audio.playFart();
   }
@@ -2292,31 +2323,45 @@ export class GameEngine {
         });
         break;
       case 'chili': {
-        // Section (quality pass): chili is fire, full stop — no gas cloud
-        // anywhere in its effect. A bigger, longer flicker sequence (more
-        // waves, bigger particles, more reach per wave) so it reads as a
-        // real spectacular flame jet rather than a small particle puff, and
-        // an outward-racing core flame so there's a clear leading edge with
-        // actual reach instead of everything spawning at the same spot.
-        for (let wave = 0; wave < 5; wave++) {
+        // Movement-quality pass 3: chili is a real flame-lick shape now
+        // (see ParticleSystem's 'flame' case), not an ellipse ("drop") that
+        // just reads as another colored blob. A longer flicker sequence
+        // (more waves, layered outer/inner colors, a bright core) with an
+        // outward-racing leading edge so there's a clear reach, plus a few
+        // rising sparks for texture.
+        for (let wave = 0; wave < 6; wave++) {
           window.setTimeout(() => {
             if (!this.enemy) return;
-            const reach = wave * 14;
+            const reach = wave * 15;
             const wx = originX + Math.cos(dirAngle) * reach;
             const wy = originY + Math.sin(dirAngle) * reach;
-            this.particles.burstDirectional({ x: wx, y: wy }, 11, dirAngle, 0.32, {
+            this.particles.burstDirectional({ x: wx, y: wy }, 9, dirAngle, 0.3, {
               color: wave % 2 === 0 ? '#ff5722' : '#ffc107',
-              shape: 'drop', size: 12 - wave, life: 0.38, maxLife: 0.38, gravity: -90,
+              shape: 'flame', size: 14 - wave, life: 0.4, maxLife: 0.4, gravity: -70,
             });
-          }, wave * 60);
+            this.particles.burstDirectional({ x: wx, y: wy }, 4, dirAngle, 0.5, {
+              color: '#ffee58', shape: 'spark', size: 6, life: 0.24, maxLife: 0.24, gravity: -140,
+            });
+          }, wave * 55);
         }
         break;
       }
-      case 'ice':
-        this.particles.burstDirectional({ x: originX, y: originY }, 12, dirAngle, 0.18, {
-          color: '#81d4fa', shape: 'circle', size: 5, life: 0.5, maxLife: 0.5, gravity: 0,
+      case 'ice': {
+        // Movement-quality pass 3: a real stream of angular ice crystals
+        // (see ParticleSystem's 'shard' case) instead of a plain blue
+        // circle/cloud — a tight, fast, reaching jet reads as a frost beam,
+        // with a thin trailing mist as a minor supporting accent only.
+        this.particles.burstDirectional({ x: originX, y: originY }, 16, dirAngle, 0.22, {
+          color: '#81d4fa', shape: 'shard', size: 9, life: 0.55, maxLife: 0.55, gravity: 10, rotSpeed: 6,
+        });
+        this.particles.burstDirectional({ x: originX, y: originY }, 8, dirAngle, 0.22, {
+          color: '#e1f5fe', shape: 'shard', size: 5, life: 0.45, maxLife: 0.45, gravity: 10, rotSpeed: -5,
+        });
+        this.particles.burstDirectional({ x: originX, y: originY }, 6, dirAngle, 0.6, {
+          color: '#b3e5fc', shape: 'cloud', size: 4, life: 0.5, maxLife: 0.5, gravity: -10,
         });
         break;
+      }
       case 'electro':
         this.particles.burstDirectional({ x: originX, y: originY }, 10, dirAngle, 0.45, {
           color: '#ffeb3b', shape: 'spark', size: 10, life: 0.28, maxLife: 0.28, gravity: 0,

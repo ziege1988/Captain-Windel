@@ -1,6 +1,10 @@
 import type { Vec2 } from '../types';
 
-export type ParticleShape = 'circle' | 'ring' | 'dust' | 'spark' | 'cloud' | 'drop';
+// 'flame' and 'shard' added for the chili/ice superpowers (see
+// GameEngine.fireSuperpowerVisual) — chili must read as a real animated
+// cartoon flame, never a colored blob/cloud, and ice must read as real
+// crystals/shards, never a plain blue circle.
+export type ParticleShape = 'circle' | 'ring' | 'dust' | 'spark' | 'cloud' | 'drop' | 'flame' | 'shard';
 
 export interface Particle {
   pos: Vec2;
@@ -127,6 +131,40 @@ export class ParticleSystem {
           ctx.ellipse(0, 0, p.size * 0.6, p.size, 0, 0, Math.PI * 2);
           ctx.fill();
           break;
+        case 'flame': {
+          // A real flame-lick silhouette (round base, flickering point)
+          // instead of a plain colored oval — rotation is set once at
+          // spawn to the aim direction (not spun via rotSpeed) so the
+          // flame keeps pointing outward the whole time it flickers.
+          const s = p.size;
+          const flicker = Math.sin(p.pos.x * 0.5 + performance.now() / 50) * 0.18;
+          ctx.beginPath();
+          ctx.moveTo(-s * 0.5, s * 0.4);
+          ctx.quadraticCurveTo(-s * 0.1, s * 0.7, s * 0.3, s * 0.15);
+          ctx.quadraticCurveTo(s * (0.9 + flicker), s * 0.05, s * 1.3, 0);
+          ctx.quadraticCurveTo(s * (0.9 + flicker), -s * 0.05, s * 0.3, -s * 0.15);
+          ctx.quadraticCurveTo(-s * 0.1, -s * 0.7, -s * 0.5, -s * 0.4);
+          ctx.closePath();
+          ctx.fill();
+          break;
+        }
+        case 'shard': {
+          // An angular ice-crystal silhouette instead of a plain circle —
+          // free to actually tumble (rotSpeed), which reads well for ice.
+          const s = p.size;
+          ctx.beginPath();
+          ctx.moveTo(0, -s);
+          ctx.lineTo(s * 0.38, -s * 0.15);
+          ctx.lineTo(s * 0.16, s * 0.95);
+          ctx.lineTo(-s * 0.16, s * 0.95);
+          ctx.lineTo(-s * 0.38, -s * 0.15);
+          ctx.closePath();
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+          ctx.lineWidth = Math.max(0.6, s * 0.08);
+          ctx.stroke();
+          break;
+        }
         default:
           ctx.beginPath();
           ctx.arc(0, 0, p.size, 0, Math.PI * 2);
