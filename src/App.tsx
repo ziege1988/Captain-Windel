@@ -8,6 +8,7 @@ import { HighscoreScreen } from './screens/HighscoreScreen';
 import { OptionsScreen } from './screens/OptionsScreen';
 import { GameOverScreen } from './screens/GameOverScreen';
 import { ShopScreen } from './screens/ShopScreen';
+import { CharacterMenuScreen } from './screens/CharacterMenuScreen';
 
 export default function App() {
   const screen = useAppStore((s) => s.screen);
@@ -24,6 +25,7 @@ export default function App() {
         {screen === 'options' && <OptionsScreen />}
         {screen === 'gameOver' && <GameOverScreen />}
         {screen === 'shop' && <ShopScreen />}
+        {screen === 'characterMenu' && <CharacterMenuScreen />}
       </div>
     </ErrorBoundary>
   );

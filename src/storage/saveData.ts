@@ -1,4 +1,4 @@
-import type { SpecialWeaponId, SuperpowerId, WeaponId } from '../game/types';
+import type { CapeColorId, CharacterId, SpecialWeaponId, SuperpowerId, WeaponId } from '../game/types';
 import { storageGet, storageSet } from './storage';
 
 const SAVE_KEY = 'captainWindel.save.v1';
@@ -32,6 +32,14 @@ export interface SaveData {
   coins: number;
   unlockedSpecialWeapons: SpecialWeaponId[];
   pendingSpecialWeapon: SpecialWeaponId | null;
+  // Character-system overhaul: which hero is currently played, which are
+  // permanently unlocked (coin purchase, see appStore.purchaseCharacter),
+  // and the cosmetic-only cape recolor system (never affects stats).
+  // Windelmann and the "red" cape are always implicitly unlocked/free.
+  selectedCharacter: CharacterId;
+  unlockedCharacters: CharacterId[];
+  equippedCapeColor: CapeColorId;
+  unlockedCapeColors: CapeColorId[];
   settings: {
     soundOn: boolean;
     musicOn: boolean;
@@ -57,6 +65,10 @@ export function defaultSaveData(): SaveData {
     coins: 0,
     unlockedSpecialWeapons: [],
     pendingSpecialWeapon: null,
+    selectedCharacter: 'windelmann',
+    unlockedCharacters: ['windelmann'],
+    equippedCapeColor: 'red',
+    unlockedCapeColors: ['red'],
     settings: {
       soundOn: true,
       musicOn: true,

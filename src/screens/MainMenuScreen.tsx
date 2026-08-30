@@ -38,7 +38,7 @@ export function MainMenuScreen() {
         <p style={{ marginTop: 10, fontSize: 15, fontWeight: 700, color: '#ffd54f' }}>🪙 {save.coins}</p>
       </div>
 
-      <StickFigurePreview />
+      <StickFigurePreview characterId={save.selectedCharacter} capeColorId={save.equippedCapeColor} />
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%', maxWidth: 340 }}>
         <button className="big-button" onClick={tap(startNewRun)}>SPIELEN</button>
@@ -47,6 +47,7 @@ export function MainMenuScreen() {
             WEITER (Level {save.highestLevelReached})
           </button>
         )}
+        <button className="big-button secondary" onClick={tap(() => setScreen('characterMenu'))}>🦸 MEIN CHARAKTER</button>
         <button className="big-button secondary" onClick={tap(() => setScreen('shop'))}>💰 WAFFENKAMMER</button>
         <button className="big-button secondary" onClick={tap(() => setScreen('equipment'))}>AUSRÜSTUNG</button>
         <button className="big-button secondary" onClick={tap(() => setScreen('superpowers'))}>SUPERKRÄFTE</button>

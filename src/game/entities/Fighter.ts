@@ -1,4 +1,4 @@
-import type { AnimState, FacingDirection, SpecialWeaponId, StatBlock, StatModifiers, WeaponId } from '../types';
+import type { AnimState, CapeColorId, CharacterId, FacingDirection, SpecialWeaponId, StatBlock, StatModifiers, WeaponId } from '../types';
 import { applyModifiers, defaultModifiers } from '../types';
 import { createBody, type PhysicsBody } from '../physics/physics';
 
@@ -73,6 +73,13 @@ export class Fighter {
   // (lost, unspent, on Game Over), consumed the instant it's used. See
   // GameEngine.useSpecialWeapon.
   hasSpecialWeaponId: SpecialWeaponId | null = null;
+  // Character-system overhaul: which of the four playable heroes this
+  // fighter's rig/palette/hair/proportions should render as (player-only —
+  // enemies/bosses leave this at the harmless default since renderFighter
+  // only reads it when f.kind === 'player'), plus the player's own cosmetic
+  // cape recolor (purely visual, never a stat — see appStore.equipCapeColor).
+  characterId: CharacterId = 'windelmann';
+  capeColorId: CapeColorId = 'red';
 
   // Enemy/boss-only metadata (unused for the player).
   aiType: string | null = null;

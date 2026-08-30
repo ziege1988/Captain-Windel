@@ -383,6 +383,16 @@ interface BossCostume {
   drawTorsoDetail?: (ctx: CanvasRenderingContext2D, f: Fighter, m: Metrics, t: number) => void;
   drawHead: (ctx: CanvasRenderingContext2D, f: Fighter, hx: number, hy: number, r: number, t: number, m: Metrics) => void;
   drawExtras?: (ctx: CanvasRenderingContext2D, f: Fighter, m: Metrics, t: number) => void;
+  // Character-quality overhaul pass 2: an escape hatch for a boss whose
+  // whole body plan isn't humanoid (the chicken has no human torso/arms at
+  // all) — when set, this entirely replaces the generic legs/torso/arms
+  // drawing below with a custom silhouette, while still reading the exact
+  // same pose numbers (legFrontX/Y drive its stride, armFrontY/armBackY
+  // drive wing flaps, hipY drives body bob) so every existing animation
+  // (idle/run/attack/hit/telegraph/death) keeps working with zero changes
+  // to computeBossPose or GameEngine. Head/weapon/extras/status overlay
+  // still draw normally on top.
+  customBody?: (ctx: CanvasRenderingContext2D, f: Fighter, m: Metrics, t: number) => void;
 }
 
 function drawChargeAura(ctx: CanvasRenderingContext2D, cx: number, cy: number, color: string, pulse: number, span: number): void {
@@ -498,7 +508,7 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
   clown: {
     torsoColor: '#e53935', limbColor: '#2b2140', torsoWidth: 24, armWidth: 13, legWidth: 15,
     headColor: '#f2d9c4', headScale: 1.15, auraColor: '#ff4081',
-    shoeStyle: 'clown',
+    shoeStyle: 'clown', handColor: '#ffffff',
     drawTorsoDetail(ctx, f, m) {
       // Ruffled colorful collar + big buttons down the front.
       const colors = ['#fdd835', '#1e88e5', '#e53935'];
@@ -516,12 +526,21 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
       }
     },
     drawHead(ctx, f, hx, hy, r, t, m) {
-      // Fuzzy orange hair tufts either side of a bald crown.
+      // Big, bushy, colorful clown wig — two overlapping tones so it reads
+      // as a real fright wig rather than a thin fringe of hair.
       ctx.fillStyle = '#ff6f00';
+      for (const side of [-1, 1] as const) {
+        for (let i = 0; i < 4; i++) {
+          ctx.beginPath();
+          ctx.arc(hx + side * (r * 0.7 + i * 3.4), hy - r * 0.2 + i * 3.2, r * 0.42, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.fillStyle = '#ffb300';
       for (const side of [-1, 1] as const) {
         for (let i = 0; i < 3; i++) {
           ctx.beginPath();
-          ctx.arc(hx + side * (r * 0.75 + i * 3), hy - r * 0.1 + i * 3, r * 0.32, 0, Math.PI * 2);
+          ctx.arc(hx + side * (r * 0.55 + i * 4), hy - r * 0.65 - i * 1.5, r * 0.3, 0, Math.PI * 2);
           ctx.fill();
         }
       }
@@ -746,26 +765,92 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
     torsoColor: '#fafafa', limbColor: '#ff9800', torsoWidth: 30, armWidth: 8, legWidth: 10,
     headColor: '#fafafa', headScale: 1.0, auraColor: '#ffca28',
     noHands: true, shoeStyle: 'none',
-    drawTorsoDetail(ctx, f, m, t) {
-      // Wing feathers instead of arms/hands — a small fan of feather
-      // shapes at each shoulder, flapping slightly.
-      const flap = Math.sin(t * 6) * 4;
-      ctx.fillStyle = '#f5f5f5';
-      ctx.strokeStyle = '#e0e0e0';
-      for (const side of [-1, 1] as const) {
+    // Character-quality overhaul pass 2: "wenn ein Boss ein Huhn ist, soll
+    // er auch wirklich wie ein Huhn aussehen" — a genuinely bird-shaped
+    // body (a round feathered egg, no human torso silhouette at all) with
+    // thin bird legs and flapping wing shapes, instead of the previous
+    // human-proportioned torso/legs with feather decorations glued on.
+    customBody(ctx, f, m, t) {
+      const { hipY, shoulderY, shoulderX, pose } = m;
+      const bodyCx = shoulderX * 0.4;
+      const bodyCy = (hipY + shoulderY) / 2 + 6;
+      const bodyW = 32;
+      const bodyH = 25;
+
+      // Thin bird legs — angled, ending where drawExtras' claws attach —
+      // driven by the exact same stride/attack pose numbers as every other
+      // boss, so walking/lunging/telegraphing all animate it correctly.
+      ctx.strokeStyle = '#ff9800';
+      ctx.lineWidth = 5.5;
+      ctx.lineCap = 'round';
+      for (const [lx, ly] of [[pose.legBackX, hipY + pose.legBackY], [pose.legFrontX, hipY + pose.legFrontY]] as const) {
         ctx.beginPath();
-        ctx.ellipse(m.shoulderX + side * 12, m.shoulderY + 14 + flap * side, 9, 16, side * 0.3, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.moveTo(bodyCx, bodyCy + bodyH * 0.6);
+        ctx.lineTo(lx * 0.7, bodyCy + bodyH * 0.6 + (ly - bodyCy) * 0.5);
+        ctx.lineTo(lx, ly);
         ctx.stroke();
       }
-      // Small tail feathers.
+
+      // Tail feathers, behind the body.
       ctx.fillStyle = '#eeeeee';
+      ctx.strokeStyle = '#e0e0e0';
+      ctx.lineWidth = 1.2;
       ctx.beginPath();
-      ctx.moveTo(-6, m.hipY - 2);
-      ctx.lineTo(-20, m.hipY - 18);
-      ctx.lineTo(-4, m.hipY - 10);
+      ctx.moveTo(bodyCx - bodyW * 0.6, bodyCy - 4);
+      ctx.lineTo(bodyCx - bodyW * 1.5, bodyCy - 26);
+      ctx.lineTo(bodyCx - bodyW * 0.9, bodyCy - 10);
+      ctx.lineTo(bodyCx - bodyW * 1.3, bodyCy + 2);
+      ctx.lineTo(bodyCx - bodyW * 0.6, bodyCy + 10);
       ctx.closePath();
       ctx.fill();
+      ctx.stroke();
+
+      // A short neck connecting the (separately-drawn) head down to the
+      // round body, so there's no visible gap.
+      ctx.strokeStyle = '#fafafa';
+      ctx.lineWidth = bodyH * 0.55;
+      ctx.beginPath();
+      ctx.moveTo(m.shoulderX + m.headX, m.headY + m.headR * 0.5);
+      ctx.lineTo(bodyCx, bodyCy - bodyH * 0.5);
+      ctx.stroke();
+
+      // The round, feathered body itself.
+      ctx.fillStyle = '#fafafa';
+      ctx.strokeStyle = '#e0e0e0';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.ellipse(bodyCx, bodyCy, bodyW, bodyH, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      // A few feather-tuft strokes for texture.
+      ctx.strokeStyle = '#e8e8e8';
+      ctx.lineWidth = 1;
+      for (let i = -2; i <= 2; i++) {
+        ctx.beginPath();
+        ctx.moveTo(bodyCx + i * 7, bodyCy - bodyH * 0.4);
+        ctx.quadraticCurveTo(bodyCx + i * 7 + 2, bodyCy, bodyCx + i * 7, bodyCy + bodyH * 0.5);
+        ctx.stroke();
+      }
+
+      // Wings — feather-fan shapes, flapping with the same arm-pose values
+      // (armBackY/armFrontY) that drive a humanoid boss's arm swing, so
+      // idle/run/attack/hit all still visibly animate the wings.
+      const wingFlap = Math.sin(t * 6) * 4;
+      for (const side of [-1, 1] as const) {
+        const armY = side < 0 ? pose.armBackY : pose.armFrontY;
+        const lift = (34 - armY) * 0.02; // raises the wing when the arm pose lifts (attack windup, hit reaction, ...)
+        ctx.save();
+        ctx.translate(bodyCx + side * bodyW * 0.85, bodyCy - 2);
+        ctx.rotate(side * (0.35 + wingFlap * side * 0.01) - lift);
+        ctx.fillStyle = '#f5f5f5';
+        ctx.strokeStyle = '#e0e0e0';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.ellipse(0, 12, 10, 18, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
     },
     drawHead(ctx, f, hx, hy, r, t, m) {
       simpleEyes(ctx, hx, hy, r, '#1a1a1a', m.blinkClosed);
@@ -1164,26 +1249,31 @@ export function renderBoss(ctx: CanvasRenderingContext2D, f: Fighter, dtSec = 0)
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
-  // Legs — filled, tapered, jointed at the knee, each ending in a real
-  // shoe silhouette per costume (viking boots, knight sabatons, robot
-  // feet, ...) instead of the old bare thin-line ends.
-  const shoeStyle = costume.shoeStyle ?? 'none';
-  const shoeColor = costume.shoeColor ?? costume.limbColor;
-  if (costume.legWidth > 0) {
-    drawLimb(ctx, 0, hipY, pose.legBackX, hipY + pose.legBackY, costume.legWidth, costume.legWidth * 0.72, 0.15, -1, costume.limbColor);
-    drawBossShoe(ctx, pose.legBackX, hipY + pose.legBackY, footTiltAngle(pose.legBackX, pose.legBackY), shoeStyle, shoeColor);
-    drawLimb(ctx, 0, hipY, pose.legFrontX, hipY + pose.legFrontY, costume.legWidth, costume.legWidth * 0.72, 0.15, -1, costume.limbColor);
-    drawBossShoe(ctx, pose.legFrontX, hipY + pose.legFrontY, footTiltAngle(pose.legFrontX, pose.legFrontY), shoeStyle, shoeColor);
-  }
-
-  // Torso (thick fill-read tapered shape — a real body, not a thin wire).
-  drawTaperedSegment(ctx, 0, hipY, shoulderX, shoulderY, costume.torsoWidth * 0.92, costume.torsoWidth, costume.torsoColor);
-  costume.drawTorsoDetail?.(ctx, f, m, t);
-
-  // Back arm + hand.
   const handColor = costume.handColor ?? HAND_COLOR;
-  const backArm = drawLimb(ctx, shoulderX, shoulderY, shoulderX + pose.armBackX, shoulderY + pose.armBackY, costume.armWidth, costume.armWidth * 0.75, 0.13, 1, costume.limbColor);
-  if (!costume.noHands) drawHand(ctx, shoulderX + pose.armBackX, shoulderY + pose.armBackY, backArm.dirX, backArm.dirY, costume.armWidth * 0.45, handColor);
+
+  if (costume.customBody) {
+    costume.customBody(ctx, f, m, t);
+  } else {
+    // Legs — filled, tapered, jointed at the knee, each ending in a real
+    // shoe silhouette per costume (viking boots, knight sabatons, robot
+    // feet, ...) instead of the old bare thin-line ends.
+    const shoeStyle = costume.shoeStyle ?? 'none';
+    const shoeColor = costume.shoeColor ?? costume.limbColor;
+    if (costume.legWidth > 0) {
+      drawLimb(ctx, 0, hipY, pose.legBackX, hipY + pose.legBackY, costume.legWidth, costume.legWidth * 0.72, 0.15, -1, costume.limbColor);
+      drawBossShoe(ctx, pose.legBackX, hipY + pose.legBackY, footTiltAngle(pose.legBackX, pose.legBackY), shoeStyle, shoeColor);
+      drawLimb(ctx, 0, hipY, pose.legFrontX, hipY + pose.legFrontY, costume.legWidth, costume.legWidth * 0.72, 0.15, -1, costume.limbColor);
+      drawBossShoe(ctx, pose.legFrontX, hipY + pose.legFrontY, footTiltAngle(pose.legFrontX, pose.legFrontY), shoeStyle, shoeColor);
+    }
+
+    // Torso (thick fill-read tapered shape — a real body, not a thin wire).
+    drawTaperedSegment(ctx, 0, hipY, shoulderX, shoulderY, costume.torsoWidth * 0.92, costume.torsoWidth, costume.torsoColor);
+    costume.drawTorsoDetail?.(ctx, f, m, t);
+
+    // Back arm + hand.
+    const backArm = drawLimb(ctx, shoulderX, shoulderY, shoulderX + pose.armBackX, shoulderY + pose.armBackY, costume.armWidth, costume.armWidth * 0.75, 0.13, 1, costume.limbColor);
+    if (!costume.noHands) drawHand(ctx, shoulderX + pose.armBackX, shoulderY + pose.armBackY, backArm.dirX, backArm.dirY, costume.armWidth * 0.45, handColor);
+  }
 
   // Head.
   if (!costume.skipDefaultHead) {
@@ -1195,9 +1285,12 @@ export function renderBoss(ctx: CanvasRenderingContext2D, f: Fighter, dtSec = 0)
   costume.drawHead(ctx, f, shoulderX + headX, headY, headR * costume.headScale, t, m);
 
   // Front arm + hand + weapon (weapon drawn on top of the hand so it
-  // reads as gripped, matching the player/normal-enemy rig).
-  const frontArm = drawLimb(ctx, shoulderX, shoulderY, shoulderX + pose.armFrontX, shoulderY + pose.armFrontY, costume.armWidth, costume.armWidth * 0.75, 0.13, 1, costume.limbColor);
-  if (!costume.noHands) drawHand(ctx, shoulderX + pose.armFrontX, shoulderY + pose.armFrontY, frontArm.dirX, frontArm.dirY, costume.armWidth * 0.45, handColor);
+  // reads as gripped, matching the player/normal-enemy rig) — skipped for
+  // a customBody boss, which draws its own limbs/wings entirely itself.
+  if (!costume.customBody) {
+    const frontArm = drawLimb(ctx, shoulderX, shoulderY, shoulderX + pose.armFrontX, shoulderY + pose.armFrontY, costume.armWidth, costume.armWidth * 0.75, 0.13, 1, costume.limbColor);
+    if (!costume.noHands) drawHand(ctx, shoulderX + pose.armFrontX, shoulderY + pose.armFrontY, frontArm.dirX, frontArm.dirY, costume.armWidth * 0.45, handColor);
+  }
   drawWeaponInHand(ctx, f, shoulderX + pose.armFrontX, shoulderY + pose.armFrontY, pose.armFrontX, pose.armFrontY);
 
   costume.drawExtras?.(ctx, f, m, t);

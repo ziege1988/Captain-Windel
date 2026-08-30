@@ -1,8 +1,9 @@
 import { create } from 'zustand';
-import type { SpecialWeaponId, SuperpowerId, WeaponId } from '../game/types';
+import type { CapeColorId, CharacterId, SpecialWeaponId, SuperpowerId, WeaponId } from '../game/types';
 import { loadSaveData, saveSaveData, type SaveData } from '../storage/saveData';
 import { getUnlockedSuperpowers } from '../data/superpowers';
 import { SPECIAL_WEAPONS } from '../data/specialWeapons';
+import { CAPE_COLORS, CHARACTERS } from '../data/characters';
 
 export type ScreenId =
   | 'mainMenu'
@@ -13,7 +14,8 @@ export type ScreenId =
   | 'options'
   | 'gameOver'
   | 'campaignComplete'
-  | 'shop';
+  | 'shop'
+  | 'characterMenu';
 
 export interface RunSummary {
   score: number;
@@ -45,6 +47,10 @@ interface AppState {
   unlockSpecialWeapon: (id: SpecialWeaponId) => void;
   purchaseSpecialWeapon: (id: SpecialWeaponId) => boolean;
   setPendingSpecialWeapon: (id: SpecialWeaponId | null) => void;
+  selectCharacter: (id: CharacterId) => void;
+  purchaseCharacter: (id: CharacterId) => boolean;
+  equipCapeColor: (id: CapeColorId) => void;
+  purchaseCapeColor: (id: CapeColorId) => boolean;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -90,7 +96,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     // and unlockedSpecialWeapons are the whole point of a permanent
     // progression layer that survives a lost run (see section 15/17 of the
     // brief). Only actual shop purchases (purchaseSpecialWeapon) ever spend
-    // coins.
+    // coins. Character-system overhaul: selectedCharacter/unlockedCharacters/
+    // equippedCapeColor/unlockedCapeColors are equally permanent cosmetic
+    // progression — a Game Over never un-picks your hero or re-locks a
+    // bought cape color.
     saveSaveData(save);
     set({ save, lastRunSummary: summary, screen: 'gameOver' });
   },
@@ -214,5 +223,59 @@ export const useAppStore = create<AppState>((set, get) => ({
     const save = { ...get().save, pendingSpecialWeapon: id };
     saveSaveData(save);
     set({ save });
+  },
+
+  // Character-system overhaul: switching only requires the character to
+  // already be unlocked — no cost, freely reversible, matches "Charakter
+  // wechseln" in the MEIN CHARAKTER menu.
+  selectCharacter: (id) => {
+    const save = get().save;
+    if (!save.unlockedCharacters.includes(id)) return;
+    const next = { ...save, selectedCharacter: id };
+    saveSaveData(next);
+    set({ save: next });
+  },
+
+  // Permanent coin unlock — same one-way shape as purchaseSpecialWeapon,
+  // but for a hero rather than a consumable. Also auto-equips the newly
+  // bought character so the purchase has an immediate, visible payoff.
+  purchaseCharacter: (id) => {
+    const save = get().save;
+    if (save.unlockedCharacters.includes(id)) return false;
+    const def = CHARACTERS[id];
+    if (save.coins < def.unlockCost) return false;
+    const next = {
+      ...save,
+      coins: save.coins - def.unlockCost,
+      unlockedCharacters: [...save.unlockedCharacters, id],
+      selectedCharacter: id,
+    };
+    saveSaveData(next);
+    set({ save: next });
+    return true;
+  },
+
+  equipCapeColor: (id) => {
+    const save = get().save;
+    if (!save.unlockedCapeColors.includes(id)) return;
+    const next = { ...save, equippedCapeColor: id };
+    saveSaveData(next);
+    set({ save: next });
+  },
+
+  purchaseCapeColor: (id) => {
+    const save = get().save;
+    if (save.unlockedCapeColors.includes(id)) return false;
+    const def = CAPE_COLORS[id];
+    if (save.coins < def.price) return false;
+    const next = {
+      ...save,
+      coins: save.coins - def.price,
+      unlockedCapeColors: [...save.unlockedCapeColors, id],
+      equippedCapeColor: id,
+    };
+    saveSaveData(next);
+    set({ save: next });
+    return true;
   },
 }));

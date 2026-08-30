@@ -1,5 +1,8 @@
 import type { Fighter } from '../entities/Fighter';
 import { WEAPONS } from '../../data/weapons';
+import { CAPE_COLORS, CHARACTERS } from '../../data/characters';
+import type { CharacterDef } from '../types';
+import { windGust } from './renderArena';
 
 interface Pose {
   bodyLean: number; // radians, forward lean of torso
@@ -13,6 +16,14 @@ interface Pose {
   capeKick: number; // extra upward/outward cape flare 0..1
   flatten: number; // 0..1, 1 = lying on the ground
   turnedAway: number; // 0..1, 1 = facing away from camera (fart pose)
+  // Character/movement-quality pass: knee/elbow bend used to be one fixed
+  // constant (0.16) for every pose, so a leg mid-stride and a leg planted
+  // flat on the ground bent by exactly the same amount — a big part of why
+  // walking read as "sliding" rather than genuine weight-bearing steps.
+  // These let individual poses (run's mid-swing leg especially) call for a
+  // deeper bend, while everything that doesn't care keeps the old default.
+  bendFront: number;
+  bendBack: number;
 }
 
 const STAND: Pose = {
@@ -20,6 +31,7 @@ const STAND: Pose = {
   armFrontX: 6, armFrontY: 26, armBackX: -6, armBackY: 26,
   legFrontX: 8, legFrontY: 40, legBackX: -8, legBackY: 40,
   capeKick: 0, flatten: 0, turnedAway: 0,
+  bendFront: 0.16, bendBack: 0.16,
 };
 
 function lerp(a: number, b: number, t: number): number {
@@ -74,32 +86,67 @@ function computePose(f: Fighter): Pose {
       return { ...STAND, hipY: bob, headOffsetY: bob * 0.6 };
     }
     case 'run': {
+      // Movement-quality pass: a believable gait needs (a) arms swinging
+      // opposite the leg on the same side (contralateral, the way people
+      // actually walk/run — the old version swung them in lockstep with
+      // the legs, which reads as marching-in-place rather than running),
+      // (b) the swinging leg's knee bending deepest as it passes under the
+      // body (mid-stride) and straightening as it reaches out to plant,
+      // and (c) a touch of hip/shoulder counter-rotation and a head that
+      // stays basically level but still visibly rides along with the gait.
       const s = Math.sin(t * 16);
+      const strideK = 1 - Math.abs(s); // 0 at full extension, 1 at mid-stride
       return {
         ...STAND,
-        bodyLean: 0.12,
+        bodyLean: 0.12 + s * 0.03,
         hipY: Math.abs(s) * -3,
-        armFrontX: 10 * s, armFrontY: 22,
-        armBackX: -10 * s, armBackY: 22,
-        legFrontX: 18 * s, legFrontY: 38,
-        legBackX: -18 * s, legBackY: 38,
+        headOffsetY: Math.abs(s) * -1.2,
+        armFrontX: -11 * s, armFrontY: 20 - strideK * 4,
+        armBackX: 11 * s, armBackY: 20 - strideK * 4,
+        legFrontX: 18 * s, legFrontY: 38 - strideK * 6,
+        legBackX: -18 * s, legBackY: 38 - strideK * 6,
+        bendFront: 0.16 + strideK * 0.26,
+        bendBack: 0.16 + strideK * 0.26,
       };
     }
-    case 'jump':
-      return { ...STAND, bodyLean: -0.05, legFrontX: 10, legFrontY: 24, legBackX: -6, legBackY: 20, armFrontY: 10, armBackY: 10 };
-    case 'fall':
-      return { ...STAND, bodyLean: 0.05, legFrontX: 14, legFrontY: 30, legBackX: -4, legBackY: 34, armFrontY: 14, armBackY: 14 };
-    case 'attack':
+    case 'jump': {
+      // A brief crouch-and-launch beat right as the jump starts (even
+      // though the physics impulse already fired instantly) so the push-
+      // off actually reads as a push-off, easing into a tucked airborne
+      // pose with the legs drawn up rather than dangling straight down.
+      const launchP = Math.min(1, t / 0.14);
+      const crouch = (1 - launchP) * 9;
       return {
-        ...STAND, bodyLean: 0.22,
-        armFrontX: 34, armFrontY: 8, armBackX: -14, armBackY: 30,
-        legFrontX: 16, legFrontY: 40, legBackX: -10, legBackY: 40,
+        ...STAND, bodyLean: -0.05 - crouch * 0.01, hipY: crouch,
+        legFrontX: lerp(4, 11, launchP), legFrontY: lerp(30, 22, launchP),
+        legBackX: lerp(-3, -7, launchP), legBackY: lerp(26, 18, launchP),
+        armFrontY: lerp(20, 8, launchP), armBackY: lerp(20, 8, launchP),
+        bendFront: 0.32, bendBack: 0.3,
       };
+    }
+    case 'fall': {
+      // Legs tucked while rising/at the apex, then visibly reaching back
+      // out toward the ground (readying to plant) the faster the fighter
+      // is actually falling — driven by the real physics velocity rather
+      // than a single static airborne pose.
+      const fallSpeed = Math.max(0, f.body.vel.y) / 700; // 0 near apex, ~1 in a fast fall
+      const reach = Math.min(1, fallSpeed);
+      return {
+        ...STAND, bodyLean: 0.05 + reach * 0.05,
+        legFrontX: lerp(11, 15, reach), legFrontY: lerp(24, 34, reach),
+        legBackX: lerp(-6, -4, reach), legBackY: lerp(20, 32, reach),
+        armFrontY: lerp(9, 16, reach), armBackY: lerp(9, 16, reach),
+        bendFront: lerp(0.3, 0.18, reach), bendBack: lerp(0.28, 0.18, reach),
+      };
+    }
+    case 'attack':
+      return computeAttackPose(f, t);
     case 'kick':
       return {
         ...STAND, bodyLean: -0.15,
         armFrontX: -8, armFrontY: 24, armBackX: -18, armBackY: 20,
         legFrontX: 34, legFrontY: 16, legBackX: -6, legBackY: 42,
+        bendFront: 0.08, bendBack: 0.16,
       };
     case 'block':
       return { ...STAND, bodyLean: 0.05, armFrontX: 18, armFrontY: 4, armBackX: 14, armBackY: 8 };
@@ -261,6 +308,101 @@ function computePose(f: Fighter): Pose {
       return STAND;
     }
   }
+}
+
+// ---------------------------------------------------------------------
+// Weapon-quality pass: every weapon used to share one identical "attack"
+// pose (arm swings to one fixed angle) regardless of what was actually
+// equipped — a spear thrust and a sword swing looked the same, and a bow
+// never visibly drew a string at all. Each weapon family now gets its own
+// multi-phase choreography (windup -> strike/thrust/release -> follow-
+// through -> recover-to-guard) that moves the whole body, not just the
+// hand, matching real weapon handling far more closely.
+// ---------------------------------------------------------------------
+
+function computeAttackPose(f: Fighter, t: number): Pose {
+  if (f.weaponId === 'spear') return computeSpearThrust(t);
+  if (f.weaponId === 'bow') return computeBowShot(t);
+  return computeSwingAttack(t, f.weaponId);
+}
+
+function computeSwingAttack(t: number, weaponId: Fighter['weaponId']): Pose {
+  const heavy = weaponId === 'axe' || weaponId === 'club' || weaponId === 'frypan';
+  const windupEnd = heavy ? 0.13 : 0.1;
+  const strikeEnd = heavy ? 0.28 : 0.22;
+  const followEnd = heavy ? 0.42 : 0.36;
+  const totalEnd = heavy ? 0.66 : 0.58;
+  // Windup: torso winds back and the weapon arm pulls up and behind —
+  // "holt aus" — with the off arm counter-balancing forward.
+  const windupPose: Pose = {
+    ...STAND, bodyLean: -0.18, armFrontX: -20, armFrontY: -8, armBackX: -8, armBackY: 30,
+    legFrontX: 6, legFrontY: 40, legBackX: -12, legBackY: 40, bendFront: 0.13,
+  };
+  // Strike: torso snaps forward hard, weight shifts onto the front leg,
+  // the weapon arm sweeps through in front of the body.
+  const strikePose: Pose = {
+    ...STAND, bodyLean: heavy ? 0.42 : 0.34, armFrontX: heavy ? 38 : 36, armFrontY: 6,
+    armBackX: -18, armBackY: 20, legFrontX: 24, legFrontY: 38, legBackX: -8, legBackY: 42,
+    bendFront: 0.24, bendBack: 0.16,
+  };
+  // Follow-through: the weapon's own weight keeps carrying the arm a touch
+  // further past the strike point before it can be reined back in — a
+  // heavier weapon (axe/club/pan) overswings noticeably further.
+  const followPose: Pose = {
+    ...STAND, bodyLean: heavy ? 0.32 : 0.22, armFrontX: heavy ? 46 : 39, armFrontY: 15,
+    armBackX: -10, armBackY: 26, legFrontX: 18, legFrontY: 40, legBackX: -10, legBackY: 40,
+  };
+  const guardPose: Pose = { ...STAND, bodyLean: 0.06, armFrontX: 10, armFrontY: 20, armBackX: -8, armBackY: 26 };
+
+  if (t < windupEnd) return blend(STAND, windupPose, t / windupEnd);
+  if (t < strikeEnd) return blend(windupPose, strikePose, (t - windupEnd) / (strikeEnd - windupEnd));
+  if (t < followEnd) return blend(strikePose, followPose, (t - strikeEnd) / (followEnd - strikeEnd));
+  return blend(followPose, guardPose, Math.min(1, (t - followEnd) / (totalEnd - followEnd)));
+}
+
+// Spear: a real two-handed-reading thrust — pull back and load weight onto
+// the back leg, then drive forward off a stabilizing front leg with both
+// arms extending together (the back arm trails close behind the front one
+// rather than swinging independently, selling the two-hand grip) instead
+// of the weapon arm alone swinging like a sword.
+function computeSpearThrust(t: number): Pose {
+  const drawEnd = 0.12;
+  const thrustEnd = 0.26;
+  const holdEnd = 0.36;
+  const totalEnd = 0.58;
+  const drawPose: Pose = {
+    ...STAND, bodyLean: -0.22, hipY: 2, armFrontX: -14, armFrontY: 8, armBackX: -20, armBackY: 12,
+    legFrontX: -2, legFrontY: 40, legBackX: -18, legBackY: 40, bendFront: 0.12, bendBack: 0.22,
+  };
+  const thrustPose: Pose = {
+    ...STAND, bodyLean: 0.32, armFrontX: 42, armFrontY: 2, armBackX: 22, armBackY: 8,
+    legFrontX: 27, legFrontY: 36, legBackX: -20, legBackY: 42, bendFront: 0.08, bendBack: 0.2,
+  };
+  const guardPose: Pose = { ...STAND, bodyLean: 0.05, armFrontX: 8, armFrontY: 18, armBackX: -6, armBackY: 22 };
+  if (t < drawEnd) return blend(STAND, drawPose, t / drawEnd);
+  if (t < thrustEnd) return blend(drawPose, thrustPose, (t - drawEnd) / (thrustEnd - drawEnd));
+  if (t < holdEnd) return thrustPose;
+  return blend(thrustPose, guardPose, Math.min(1, (t - holdEnd) / (totalEnd - holdEnd)));
+}
+
+// Bow: raise -> draw the string back to the shoulder (the back "string"
+// hand pulls in while the bow arm stays extended) -> a held beat at full
+// draw -> release, where the string hand snaps forward. drawWeaponInHand
+// mirrors these exact phase boundaries to actually animate the string
+// itself, so the two stay in lockstep.
+function computeBowShot(t: number): Pose {
+  const raiseEnd = 0.12;
+  const drawEnd = 0.32;
+  const releaseEnd = 0.4;
+  const totalEnd = 0.6;
+  const raisePose: Pose = { ...STAND, bodyLean: 0.04, armFrontX: 23, armFrontY: -1, armBackX: 6, armBackY: 12 };
+  const drawnPose: Pose = { ...STAND, bodyLean: 0.08, armFrontX: 26, armFrontY: -3, armBackX: -15, armBackY: 6 };
+  const releasePose: Pose = { ...STAND, bodyLean: 0.1, armFrontX: 24, armFrontY: -1, armBackX: 12, armBackY: 15 };
+  const guardPose: Pose = { ...STAND, bodyLean: 0.05, armFrontX: 10, armFrontY: 20, armBackX: -8, armBackY: 24 };
+  if (t < raiseEnd) return blend(STAND, raisePose, t / raiseEnd);
+  if (t < drawEnd) return blend(raisePose, drawnPose, (t - raiseEnd) / (drawEnd - raiseEnd));
+  if (t < releaseEnd) return blend(drawnPose, releasePose, (t - drawEnd) / (releaseEnd - drawEnd));
+  return blend(releasePose, guardPose, Math.min(1, (t - releaseEnd) / (totalEnd - releaseEnd)));
 }
 
 // Section 3 (polish pass, revised): the physics ground position (pos.y ===
@@ -590,7 +732,15 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   const flashInvuln = f.invulnerableMs > 0 && Math.floor(f.animTimeMs / 60) % 2 === 0;
   ctx.globalAlpha = flashInvuln ? 0.5 : 1;
 
-  const headR = 12;
+  // Character-system overhaul: the four playable heroes share this exact
+  // rig/animation — only proportions and palette differ. Everyone else
+  // (normal enemies, bosses render through renderBoss.ts) uses the
+  // original slim proportions untouched.
+  const charDef = f.kind === 'player' ? CHARACTERS[f.characterId] : null;
+  const bw = charDef?.build === 'heavy' ? 1.55 : 1; // body-width multiplier
+  const headMult = charDef?.build === 'heavy' ? 1.22 : 1;
+
+  const headR = 12 * headMult;
   const hipY = -f.height * 0.45 + pose.hipY;
   const shoulderY = -f.height * 0.78;
   const headY = shoulderY - headR - 2 + pose.headOffsetY;
@@ -603,19 +753,21 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   drawCape(ctx, f, shoulderY, pose, dtSec);
 
   // Legs — filled, tapered, jointed at the knee, each ending in a real
-  // shoe silhouette instead of a bare line-end or a plain oval.
+  // shoe silhouette instead of a bare line-end or a plain oval. Knee bend
+  // now comes from the pose itself (deeper mid-stride) instead of one
+  // fixed constant for every pose.
   const shoeStyle = resolveShoeStyle(f);
-  drawLimb(ctx, 0, hipY, pose.legBackX, hipY + pose.legBackY, 7.5, 5.5, 0.16, -1, f.color);
+  drawLimb(ctx, 0, hipY, pose.legBackX, hipY + pose.legBackY, 7.5 * bw, 5.5 * bw, pose.bendBack, -1, f.color);
   drawShoe(ctx, pose.legBackX, hipY + pose.legBackY, footTiltAngle(pose.legBackX, pose.legBackY), shoeStyle);
-  drawLimb(ctx, 0, hipY, pose.legFrontX, hipY + pose.legFrontY, 7.5, 5.5, 0.16, -1, f.color);
+  drawLimb(ctx, 0, hipY, pose.legFrontX, hipY + pose.legFrontY, 7.5 * bw, 5.5 * bw, pose.bendFront, -1, f.color);
   drawShoe(ctx, pose.legFrontX, hipY + pose.legFrontY, footTiltAngle(pose.legFrontX, pose.legFrontY), shoeStyle);
 
   // Torso — tapered slightly wider at the shoulders than the hips for a
   // heroic cartoon silhouette instead of a uniform-width wire.
   const shoulderX = Math.sin(pose.bodyLean) * 10;
-  drawTaperedSegment(ctx, 0, hipY, shoulderX, shoulderY, 13, 16, f.color);
+  drawTaperedSegment(ctx, 0, hipY, shoulderX, shoulderY, 13 * bw, 16 * bw, f.color);
 
-  // Diaper (player only) at hip.
+  // Diaper (Windelmann only) at hip.
   if (f.accessories.includes('diaper')) {
     ctx.save();
     ctx.fillStyle = '#f5f5f5';
@@ -628,10 +780,11 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
     ctx.restore();
   }
 
+  if (charDef) drawPlayerClothing(ctx, charDef, shoulderX, shoulderY, hipY, bw);
   drawBodyAccessories(ctx, f, shoulderX, shoulderY, hipY);
 
   // Back arm (behind torso).
-  drawArm(ctx, shoulderX, shoulderY, pose.armBackX, pose.armBackY, f, false);
+  drawArm(ctx, shoulderX, shoulderY, pose.armBackX, pose.armBackY, f, false, pose.bendBack, bw);
 
   // Head.
   ctx.beginPath();
@@ -639,11 +792,13 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   ctx.arc(shoulderX + headX, headY, headR, 0, Math.PI * 2);
   ctx.fill();
 
+  if (charDef) drawPlayerHair(ctx, charDef, shoulderX + headX, headY, headR, f.animTimeMs);
   drawHeadAccessories(ctx, f, shoulderX + headX, headY, headR);
   drawFace(ctx, f, shoulderX + headX, headY, headR, pose, dtSec);
+  if (charDef) drawPlayerFaceExtras(ctx, charDef, shoulderX + headX, headY, headR, f.animTimeMs);
 
   // Front arm (in front of torso, holds weapon).
-  drawArm(ctx, shoulderX, shoulderY, pose.armFrontX, pose.armFrontY, f, true);
+  drawArm(ctx, shoulderX, shoulderY, pose.armFrontX, pose.armFrontY, f, true, pose.bendFront, bw);
   drawWeaponInHand(ctx, f, shoulderX + pose.armFrontX, shoulderY + pose.armFrontY, pose.armFrontX, pose.armFrontY);
 
   drawExtraAccessories(ctx, f, hipY);
@@ -652,9 +807,12 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   ctx.restore();
 }
 
-function drawArm(ctx: CanvasRenderingContext2D, sx: number, sy: number, dx: number, dy: number, f: Fighter, front: boolean): void {
+function drawArm(
+  ctx: CanvasRenderingContext2D, sx: number, sy: number, dx: number, dy: number, f: Fighter, front: boolean,
+  bend = 0.15, widthMult = 1,
+): void {
   const isGlove = f.accessories.includes('gloves') || f.accessories.includes('boxingGloves');
-  const limb = drawLimb(ctx, sx, sy, sx + dx, sy + dy, 6, 4.5, 0.15, 1, f.color);
+  const limb = drawLimb(ctx, sx, sy, sx + dx, sy + dy, 6 * widthMult, 4.5 * widthMult, bend, 1, f.color);
   if (isGlove) {
     ctx.save();
     ctx.fillStyle = '#c0392b';
@@ -856,17 +1014,58 @@ export function drawWeaponInHand(ctx: CanvasRenderingContext2D, f: Fighter, hand
       break;
     }
     case 'bow': {
+      // Weapon-quality pass: the string now genuinely moves — pulled back
+      // through the attack's draw phase, held at full draw, then snapping
+      // forward again on release — with a nocked arrow visible while
+      // drawn, instead of a permanently flat string.
+      const bowRadius = 20;
+      const topAngle = Math.PI * 0.62;
+      const botAngle = Math.PI * 1.38;
+      const topX = 4 + Math.cos(topAngle) * bowRadius;
+      const topY = Math.sin(topAngle) * bowRadius;
+      const botX = 4 + Math.cos(botAngle) * bowRadius;
+      const botY = Math.sin(botAngle) * bowRadius;
+
+      let pull = 0;
+      if (f.anim === 'attack') {
+        const at = f.animTimeMs / 1000;
+        const raiseEnd = 0.12;
+        const drawEnd = 0.32;
+        const releaseEnd = 0.4;
+        if (at < raiseEnd) pull = 0;
+        else if (at < drawEnd) pull = (at - raiseEnd) / (drawEnd - raiseEnd);
+        else if (at < releaseEnd) pull = Math.max(0, 1 - (at - drawEnd) / (releaseEnd - drawEnd));
+        else pull = 0;
+      }
+      const stringMidX = -pull * 16;
+
       ctx.strokeStyle = weapon.color;
       ctx.lineWidth = 4;
       ctx.beginPath();
-      ctx.arc(4, 0, 20, Math.PI * 0.62, Math.PI * 1.38);
+      ctx.arc(4, 0, bowRadius, topAngle, botAngle);
       ctx.stroke();
       ctx.strokeStyle = weapon.trailColor ?? '#f1c40f';
       ctx.lineWidth = 1.4;
       ctx.beginPath();
-      ctx.moveTo(4 + Math.cos(Math.PI * 0.62) * 20, Math.sin(Math.PI * 0.62) * 20);
-      ctx.lineTo(4 + Math.cos(Math.PI * 1.38) * 20, Math.sin(Math.PI * 1.38) * 20);
+      ctx.moveTo(topX, topY);
+      ctx.lineTo(stringMidX, 0);
+      ctx.lineTo(botX, botY);
       ctx.stroke();
+      if (pull > 0.05) {
+        ctx.strokeStyle = '#6d4c2f';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(stringMidX, 0);
+        ctx.lineTo(stringMidX + 26, 0);
+        ctx.stroke();
+        ctx.fillStyle = '#9e9e9e';
+        ctx.beginPath();
+        ctx.moveTo(stringMidX + 26, 0);
+        ctx.lineTo(stringMidX + 20, -3);
+        ctx.lineTo(stringMidX + 20, 3);
+        ctx.closePath();
+        ctx.fill();
+      }
       break;
     }
     default: {
@@ -904,7 +1103,12 @@ function updateCapePhysics(f: Fighter, dtSec: number): CapeState {
   }
   if (dtSec <= 0 || dtSec > 0.5) return s;
   const t = f.animTimeMs / 1000;
-  const idleWind = Math.sin(t * 2.1 + f.body.pos.x * 0.01) * 0.15;
+  // Character-quality overhaul pass 2: the same rare-gust rhythm the
+  // meadow grass sways on also gives the cape (and hair, see
+  // drawPlayerHair) an occasional stronger flutter — one shared "wind"
+  // moment across the whole scene rather than the cape's own private sway.
+  const gust = windGust(performance.now() / 1000);
+  const idleWind = Math.sin(t * 2.1 + f.body.pos.x * 0.01) * (0.15 + gust * 0.35);
   const localFwdSpeed = f.body.vel.x * f.facing;
   const speedFlare = Math.max(-0.3, Math.min(1.2, localFwdSpeed * 0.0022));
   const airLift = f.body.grounded ? 0 : 0.35;
@@ -927,9 +1131,17 @@ function drawCape(ctx: CanvasRenderingContext2D, f: Fighter, shoulderY: number, 
   const kick = pose.capeKick * 40;
   const flare = kick;
 
+  // Character-system overhaul: a player's cape is a cosmetic color choice
+  // (see MEIN CHARAKTER / CAPE_COLORS) rather than one fixed red — enemies/
+  // bosses with the plain 'cape'/'fancyCape' accessory keep their original
+  // fixed colors untouched.
+  const capePlayerColors = f.kind === 'player' ? CAPE_COLORS[f.capeColorId] : null;
+  const primary = capePlayerColors?.primary ?? (f.accessories.includes('fancyCape') ? '#8e24aa' : '#c0392b');
+  const secondary = capePlayerColors?.secondary ?? (f.accessories.includes('fancyCape') ? '#6a1b9a' : '#8e2318');
+
   ctx.save();
-  ctx.fillStyle = f.accessories.includes('fancyCape') ? '#8e24aa' : '#c0392b';
-  ctx.strokeStyle = f.accessories.includes('fancyCape') ? '#6a1b9a' : '#8e2318';
+  ctx.fillStyle = primary;
+  ctx.strokeStyle = secondary;
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(-4, shoulderY + 2);
@@ -939,6 +1151,227 @@ function drawCape(ctx: CanvasRenderingContext2D, f: Fighter, shoulderY: number, 
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------
+// Character-system overhaul: per-hero clothing, hair and small face
+// accessories (glasses/mustache) — layered onto the shared rig above so
+// all four heroes are drawn by the exact same pose/animation code, only
+// differing in these cosmetic passes plus the proportion multipliers
+// already applied to the limb/torso widths above.
+// ---------------------------------------------------------------------
+
+/** A simple torso garment patch per hero, drawn over the plain silhouette
+ * torso — visible "Kleidung" without needing a whole separate clothing
+ * rig. Windelmann stays bare-chested (his diaper + cape are already his
+ * whole costume); the other three each get a distinct, readable garment. */
+function drawPlayerClothing(ctx: CanvasRenderingContext2D, def: CharacterDef, shoulderX: number, shoulderY: number, hipY: number, bw: number): void {
+  ctx.save();
+  switch (def.id) {
+    case 'grandpa': {
+      // A buttoned shirt with crossed suspenders over it.
+      ctx.fillStyle = def.clothColor;
+      ctx.beginPath();
+      ctx.moveTo(shoulderX - 11 * bw, shoulderY + 4);
+      ctx.lineTo(shoulderX + 11 * bw, shoulderY + 4);
+      ctx.lineTo(shoulderX + 8 * bw, hipY - 2);
+      ctx.lineTo(shoulderX - 8 * bw, hipY - 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = def.clothColor2;
+      ctx.lineWidth = 2.6;
+      ctx.beginPath();
+      ctx.moveTo(shoulderX - 8 * bw, shoulderY + 5);
+      ctx.lineTo(shoulderX + 4 * bw, hipY - 3);
+      ctx.moveTo(shoulderX + 8 * bw, shoulderY + 5);
+      ctx.lineTo(shoulderX - 4 * bw, hipY - 3);
+      ctx.stroke();
+      ctx.fillStyle = '#ffd54f';
+      for (const by of [shoulderY + 12, shoulderY + 22]) {
+        ctx.beginPath();
+        ctx.arc(shoulderX + 1, by, 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      break;
+    }
+    case 'punk': {
+      // An open jacket: dark leather patch with a bright zipper line and a
+      // couple of studs, popped collar at the shoulders.
+      ctx.fillStyle = def.clothColor;
+      ctx.beginPath();
+      ctx.moveTo(shoulderX - 12 * bw, shoulderY + 2);
+      ctx.lineTo(shoulderX + 12 * bw, shoulderY + 2);
+      ctx.lineTo(shoulderX + 9 * bw, hipY);
+      ctx.lineTo(shoulderX - 9 * bw, hipY);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = def.clothColor2;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(shoulderX, shoulderY + 5);
+      ctx.lineTo(shoulderX, hipY - 1);
+      ctx.stroke();
+      ctx.fillStyle = '#bdbdbd';
+      for (const by of [shoulderY + 9, shoulderY + 17, shoulderY + 25]) {
+        ctx.beginPath();
+        ctx.arc(shoulderX - 7 * bw, by, 1.3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Popped collar.
+      ctx.fillStyle = def.clothColor;
+      ctx.beginPath();
+      ctx.moveTo(shoulderX - 10 * bw, shoulderY + 1);
+      ctx.lineTo(shoulderX - 4, shoulderY - 6);
+      ctx.lineTo(shoulderX - 2, shoulderY + 4);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(shoulderX + 10 * bw, shoulderY + 1);
+      ctx.lineTo(shoulderX + 4, shoulderY - 6);
+      ctx.lineTo(shoulderX + 2, shoulderY + 4);
+      ctx.closePath();
+      ctx.fill();
+      break;
+    }
+    case 'brawler': {
+      // Snug overalls with one big front pocket and shoulder straps, sized
+      // up with the character's own wider proportions.
+      ctx.fillStyle = def.clothColor;
+      ctx.beginPath();
+      ctx.moveTo(shoulderX - 13 * bw, shoulderY + 8);
+      ctx.lineTo(shoulderX + 13 * bw, shoulderY + 8);
+      ctx.lineTo(shoulderX + 11 * bw, hipY + 2);
+      ctx.lineTo(shoulderX - 11 * bw, hipY + 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = def.clothColor2;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(shoulderX - 7 * bw, shoulderY + 8);
+      ctx.lineTo(shoulderX - 7 * bw, shoulderY - 4);
+      ctx.moveTo(shoulderX + 7 * bw, shoulderY + 8);
+      ctx.lineTo(shoulderX + 7 * bw, shoulderY - 4);
+      ctx.stroke();
+      ctx.fillStyle = def.clothColor2;
+      ctx.beginPath();
+      ctx.roundRect(shoulderX - 6 * bw, (shoulderY + hipY) / 2, 12 * bw, 9, 2);
+      ctx.fill();
+      break;
+    }
+    default:
+      break;
+  }
+  ctx.restore();
+}
+
+/** A real drawn hairstyle per hero instead of a color-blob — always
+ * drawn immediately after the plain head fill and before drawFace/
+ * drawHeadAccessories, so it frames the head (crown/sides/back) without
+ * ever covering the eyes or mouth (drawFace is always the last thing
+ * drawn on top, per the section above this fixed for Windelmann). */
+function drawPlayerHair(ctx: CanvasRenderingContext2D, def: CharacterDef, hx: number, hy: number, r: number, animTimeMs: number): void {
+  const t = animTimeMs / 1000;
+  const gust = windGust(performance.now() / 1000);
+  const jitter = Math.sin(t * 6) * 0.06 + gust * 0.22; // a little life during movement, plus the shared wind gust
+  ctx.save();
+  ctx.fillStyle = def.hairColor;
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+  ctx.lineWidth = 0.8;
+  switch (def.id) {
+    case 'windelmann': {
+      // A short, cheeky tuft of spikes on top.
+      for (const [dx, h] of [[-0.35, 0.5], [0, 0.68], [0.4, 0.48]] as const) {
+        ctx.beginPath();
+        ctx.moveTo(hx + r * (dx - 0.16), hy - r * 0.78);
+        ctx.lineTo(hx + r * dx + r * jitter, hy - r * (0.78 + h));
+        ctx.lineTo(hx + r * (dx + 0.16), hy - r * 0.78);
+        ctx.closePath();
+        ctx.fill();
+      }
+      break;
+    }
+    case 'grandpa': {
+      // Bald on top — just soft grey tufts above the ears and around the
+      // back of the head, never touching the crown/face region.
+      ctx.beginPath();
+      ctx.ellipse(hx - r * 0.85, hy + r * 0.05, r * 0.4, r * 0.32, 0.3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(hx + r * 0.55, hy + r * 0.55, r * 0.55, r * 0.32, -0.2, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    case 'punk': {
+      // A tall, jagged mohawk strip running front-to-back along the crown.
+      const spikes = 5;
+      ctx.beginPath();
+      ctx.moveTo(hx - r * 0.55, hy - r * 0.7);
+      for (let i = 0; i <= spikes; i++) {
+        const p = i / spikes;
+        const px = hx + lerp(-r * 0.55, r * 0.75, p);
+        const spikeH = r * (0.85 + (i % 2 === 0 ? 0.35 : 0) + jitter);
+        ctx.lineTo(px, hy - r * 0.7 - spikeH);
+        ctx.lineTo(px + r * 0.12, hy - r * 0.7);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      break;
+    }
+    case 'brawler': {
+      // A broad, rounded flat-top — reads as a big, distinct head shape
+      // rather than more spikes, matching his heavier proportions.
+      ctx.beginPath();
+      ctx.moveTo(hx - r * 0.95, hy - r * 0.55);
+      ctx.lineTo(hx - r * 0.85, hy - r * 1.15);
+      ctx.lineTo(hx + r * 0.85, hy - r * 1.15);
+      ctx.lineTo(hx + r * 0.95, hy - r * 0.55);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      break;
+    }
+    default:
+      break;
+  }
+  ctx.restore();
+}
+
+/** Small per-hero face accessories drawn on top of drawFace (so glasses
+ * sit correctly over already-visible eyes rather than hiding them, and a
+ * mustache sits over an already-drawn mouth). */
+function drawPlayerFaceExtras(ctx: CanvasRenderingContext2D, def: CharacterDef, hx: number, hy: number, r: number, animTimeMs: number): void {
+  if (def.id !== 'grandpa') return;
+  const t = animTimeMs / 1000;
+  // Occasional "richtet Brille" nudge — a tiny vertical bob every few
+  // seconds, purely cosmetic idle flavor.
+  const nudge = Math.max(0, Math.sin(t * 0.7)) > 0.97 ? -0.6 : 0;
+  ctx.save();
+  // Round spectacles over both eyes.
+  ctx.strokeStyle = '#3e2723';
+  ctx.lineWidth = 1.3;
+  const backX = hx - r * 0.05;
+  const frontX = hx + r * 0.55;
+  const eyeY = hy - r * 0.08 + nudge;
+  ctx.beginPath();
+  ctx.arc(backX, eyeY, r * 0.32, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(frontX, eyeY, r * 0.36, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(backX + r * 0.3, eyeY);
+  ctx.lineTo(frontX - r * 0.32, eyeY);
+  ctx.stroke();
+  // Bushy mustache under the nose.
+  ctx.fillStyle = '#e0e0e0';
+  ctx.beginPath();
+  ctx.moveTo(hx - r * 0.05, hy + r * 0.32);
+  ctx.quadraticCurveTo(hx + r * 0.25, hy + r * 0.18, hx + r * 0.6, hy + r * 0.34);
+  ctx.quadraticCurveTo(hx + r * 0.28, hy + r * 0.5, hx - r * 0.05, hy + r * 0.32);
+  ctx.closePath();
+  ctx.fill();
   ctx.restore();
 }
 

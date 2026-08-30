@@ -241,6 +241,49 @@ export interface SpecialWeaponDef {
 }
 
 // ---------------------------------------------------------------------------
+// Playable characters (character-system overhaul)
+// ---------------------------------------------------------------------------
+
+// Four selectable heroes sharing one rig/animation system (renderFighter.ts)
+// but each with their own proportions, palette, hair and personality — see
+// src/data/characters.ts. Windelmann is unlocked from the start; the other
+// three are permanent coin unlocks (see SaveData.unlockedCharacters).
+export type CharacterId = 'windelmann' | 'grandpa' | 'punk' | 'brawler';
+
+// 'slim' keeps the deliberately thin, almost-stick-figure silhouette
+// (Windelmann/Grandpa/Punk); 'heavy' is the wide, big-bellied fourth
+// character — the one place body proportions differ, per the brief.
+export type CharacterBuild = 'slim' | 'heavy';
+
+export interface CharacterDef {
+  id: CharacterId;
+  name: string;
+  icon: string; // emoji shown in menus
+  tagline: string; // one-line flavor text for the select screen
+  personality: string; // short personality descriptor
+  unlockCost: number; // 0 = unlocked from the start
+  build: CharacterBuild;
+  bodyColor: string; // silhouette/skin fill for limbs, torso, head
+  hairColor: string;
+  clothColor: string; // primary clothing accent
+  clothColor2: string; // secondary clothing accent
+  defaultCape: CapeColorId;
+}
+
+// A purely cosmetic cape recolor, unlocked permanently with coins — never
+// changes stats, matching the brief's "keine kosmetische Ausstattung darf
+// einen Gameplay-Vorteil geben."
+export type CapeColorId = 'red' | 'blue' | 'purple' | 'gold' | 'green';
+
+export interface CapeColorDef {
+  id: CapeColorId;
+  name: string;
+  price: number;
+  primary: string;
+  secondary: string;
+}
+
+// ---------------------------------------------------------------------------
 // Arenas
 // ---------------------------------------------------------------------------
 

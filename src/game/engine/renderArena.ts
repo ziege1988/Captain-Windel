@@ -200,9 +200,17 @@ function drawPaletteEffects(ctx: CanvasRenderingContext2D, arena: ArenaDef, layo
 // index directly) so the field never moves as one uniform block, movement
 // stays slow and subtle, and it briefly intensifies during periodic gusts.
 // A few drifting petals/leaves ride the same wind on top for extra life.
+// Character-quality overhaul pass 2: exported so renderFighter.ts can sway
+// hair/cape/clothing on the same rare-gust rhythm as the meadow grass
+// itself — one shared "wind" concept felt across the whole scene, not
+// grass and characters each doing their own unrelated thing.
+export function windGust(timeSec: number): number {
+  return Math.max(0, Math.sin(timeSec * 0.12)) ** 5; // rare, brief, gentle gust
+}
+
 function drawSwayingGrass(ctx: CanvasRenderingContext2D, arena: ArenaDef, layout: ArenaLayout, timeSec: number): void {
   const { width, groundY, height } = layout;
-  const gust = Math.max(0, Math.sin(timeSec * 0.12)) ** 5; // rare, brief, gentle gust
+  const gust = windGust(timeSec);
   const groundSpan = Math.max(1, height - groundY);
 
   // Back layer: shorter, denser, slightly darker/duller blades filling the

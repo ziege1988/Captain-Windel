@@ -3,6 +3,7 @@ import type { BossDef, EnemyDef } from '../types';
 import { BALANCE } from '../../data/balance';
 import type { SaveData } from '../../storage/saveData';
 import { UPGRADES } from '../../data/upgrades';
+import { CHARACTERS } from '../../data/characters';
 
 // Baseline visual scale so fighters read clearly on a tall mobile screen
 // with a lot of sky above the ground line — purely cosmetic, applied on
@@ -10,12 +11,20 @@ import { UPGRADES } from '../../data/upgrades';
 const VISUAL_SCALE = 1.35;
 
 export function createPlayer(x: number, groundY: number, save: SaveData): Fighter {
-  const f = new Fighter('player', 'player', 'Captain Windel', { ...BALANCE.player.baseStats }, x, groundY);
-  f.color = '#111111';
+  // Character-system overhaul: which of the four heroes to actually build
+  // and render — purely a skin (palette/hair/proportions, resolved in
+  // renderFighter.ts) on top of the exact same stats/weapons/superpowers,
+  // so switching characters never changes balance, only how it looks.
+  const charDef = CHARACTERS[save.selectedCharacter] ?? CHARACTERS.windelmann;
+  const f = new Fighter('player', 'player', charDef.name, { ...BALANCE.player.baseStats }, x, groundY);
+  f.characterId = charDef.id;
+  f.color = charDef.bodyColor;
+  f.capeColorId = save.equippedCapeColor;
   f.weaponId = 'fists';
-  f.accessories = ['diaper', 'cape'];
+  // Only Windelmann wears the diaper — it's his specific gag/identity, not
+  // a generic player accessory the other three heroes should inherit.
+  f.accessories = charDef.id === 'windelmann' ? ['diaper', 'cape'] : ['cape'];
   f.scale = VISUAL_SCALE;
-  void save;
   return f;
 }
 
