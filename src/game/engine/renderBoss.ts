@@ -184,6 +184,171 @@ function lowestFootLocalY(f: Fighter, pose: BossPose): number {
   return -f.height * 0.45 + pose.hipY + Math.max(pose.legFrontY, pose.legBackY, 0);
 }
 
+// ---------------------------------------------------------------------
+// Section (character-quality overhaul): the same filled tapered-limb /
+// hand / shoe primitives added to renderFighter.ts, duplicated here per
+// this file's own no-shared-code convention (see the top-of-file note).
+// Every boss's own costume (silhouette/colors/head/props) stays exactly
+// as designed — this only upgrades the generic limb/torso rig underneath
+// from thin strokes to a real jointed, filled body.
+// ---------------------------------------------------------------------
+
+function bentJoint(x1: number, y1: number, x2: number, y2: number, bendFrac: number, sign: 1 | -1): { x: number; y: number } {
+  const mx = (x1 + x2) / 2;
+  const my = (y1 + y2) / 2;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = (-dy / len) * sign;
+  const ny = (dx / len) * sign;
+  const bend = bendFrac * len;
+  return { x: mx + nx * bend, y: my + ny * bend };
+}
+
+function drawTaperedSegment(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, w1: number, w2: number, color: string): void {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len;
+  const ny = dx / len;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x1 + (nx * w1) / 2, y1 + (ny * w1) / 2);
+  ctx.lineTo(x2 + (nx * w2) / 2, y2 + (ny * w2) / 2);
+  ctx.lineTo(x2 - (nx * w2) / 2, y2 - (ny * w2) / 2);
+  ctx.lineTo(x1 - (nx * w1) / 2, y1 - (ny * w1) / 2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(x1, y1, w1 / 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(x2, y2, w2 / 2, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawLimb(
+  ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number,
+  wNear: number, wFar: number, bendFrac: number, sign: 1 | -1, color: string,
+): { dirX: number; dirY: number } {
+  if (wNear <= 0 && wFar <= 0) return { dirX: x2 - x1, dirY: y2 - y1 };
+  const j = bentJoint(x1, y1, x2, y2, bendFrac, sign);
+  const wMid = (wNear + wFar) / 2;
+  drawTaperedSegment(ctx, x1, y1, j.x, j.y, wNear, wMid, color);
+  drawTaperedSegment(ctx, j.x, j.y, x2, y2, wMid, wFar, color);
+  return { dirX: x2 - j.x, dirY: y2 - j.y };
+}
+
+const HAND_COLOR = '#f7ede1';
+
+function drawHand(ctx: CanvasRenderingContext2D, x: number, y: number, dirX: number, dirY: number, size: number, color: string): void {
+  const angle = Math.atan2(dirY, dirX);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.fillStyle = color;
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.ellipse(size * 0.15, 0, size * 1.05, size * 0.82, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.lineWidth = 0.9;
+  ctx.beginPath();
+  ctx.moveTo(size * 0.5, -size * 0.55);
+  ctx.lineTo(size * 1.15, -size * 0.42);
+  ctx.moveTo(size * 0.6, size * 0.02);
+  ctx.lineTo(size * 1.25, size * 0.05);
+  ctx.moveTo(size * 0.5, size * 0.55);
+  ctx.lineTo(size * 1.1, size * 0.48);
+  ctx.stroke();
+  ctx.restore();
+}
+
+type BossShoeStyle = 'clown' | 'boot' | 'armored' | 'metal' | 'claw' | 'none';
+
+function drawBossShoe(ctx: CanvasRenderingContext2D, x: number, y: number, tiltAngle: number, style: BossShoeStyle, color: string): void {
+  if (style === 'none') return;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(tiltAngle);
+  ctx.lineJoin = 'round';
+  switch (style) {
+    case 'clown':
+      ctx.fillStyle = '#fdd835';
+      ctx.strokeStyle = '#c9a800';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(-11, -6);
+      ctx.lineTo(5, -7);
+      ctx.quadraticCurveTo(24, -5, 25, 4);
+      ctx.quadraticCurveTo(24, 10, 7, 9);
+      ctx.lineTo(-11, 7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      break;
+    case 'boot':
+      ctx.fillStyle = color;
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(-7, -11);
+      ctx.lineTo(4, -11);
+      ctx.lineTo(5, 2.5);
+      ctx.quadraticCurveTo(16, 1, 17, 6);
+      ctx.quadraticCurveTo(16, 9.5, 2, 9);
+      ctx.lineTo(-7, 7.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      break;
+    case 'armored':
+      ctx.fillStyle = color;
+      ctx.strokeStyle = '#263238';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(-7, -9);
+      ctx.lineTo(4, -9);
+      ctx.lineTo(5, 1);
+      ctx.lineTo(18, 3.5);
+      ctx.lineTo(16, 8.5);
+      ctx.lineTo(-7, 7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-3, -2);
+      ctx.lineTo(8, -1);
+      ctx.stroke();
+      break;
+    case 'metal':
+      ctx.fillStyle = color;
+      ctx.strokeStyle = '#1a1a1a';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.roundRect(-9, -8, 26, 14, 4);
+      ctx.fill();
+      ctx.stroke();
+      break;
+    case 'claw':
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2.6;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(0, 0); ctx.lineTo(-8, 8);
+      ctx.moveTo(0, 0); ctx.lineTo(0, 10);
+      ctx.moveTo(0, 0); ctx.lineTo(9, 8);
+      ctx.stroke();
+      break;
+  }
+  ctx.restore();
+}
+
+function footTiltAngle(dx: number, dy: number): number {
+  return Math.atan2(dx, Math.abs(dy) + 0.001) * 0.5;
+}
+
 interface Metrics {
   hipY: number;
   shoulderY: number;
@@ -192,6 +357,7 @@ interface Metrics {
   headY: number;
   headR: number;
   pose: BossPose;
+  blinkClosed: boolean;
 }
 
 interface BossCostume {
@@ -204,6 +370,15 @@ interface BossCostume {
   headScale: number;
   auraColor: string;
   skipDefaultHead?: boolean;
+  // Section (character-quality overhaul): per-costume hand/shoe styling —
+  // most bosses get the same friendly cartoon-glove hand as the player/
+  // normal enemies (a unifying device), but a few override it (a robot's
+  // metal hand, a ninja's dark glove, a wraith's translucent one) or skip
+  // hands entirely (the wraith has no real arms below the sleeves).
+  handColor?: string;
+  noHands?: boolean;
+  shoeStyle?: BossShoeStyle;
+  shoeColor?: string;
   drawBack?: (ctx: CanvasRenderingContext2D, f: Fighter, m: Metrics, t: number) => void;
   drawTorsoDetail?: (ctx: CanvasRenderingContext2D, f: Fighter, m: Metrics, t: number) => void;
   drawHead: (ctx: CanvasRenderingContext2D, f: Fighter, hx: number, hy: number, r: number, t: number, m: Metrics) => void;
@@ -227,7 +402,49 @@ function drawChargeAura(ctx: CanvasRenderingContext2D, cx: number, cy: number, c
   ctx.restore();
 }
 
-function glowEyes(ctx: CanvasRenderingContext2D, hx: number, hy: number, r: number, color: string, spacing = 0.42): void {
+// Section (character-quality overhaul): boss blink timer — same idea as
+// the player/normal-enemy face system, kept deliberately lighter (bosses'
+// heads are custom-shaped per costume, so this only gates a closed-eye
+// beat rather than driving a full brow/mouth expression system).
+interface BossBlinkState { nextBlinkAt: number; blinkT: number; }
+const bossBlinkCache = new WeakMap<Fighter, BossBlinkState>();
+
+function updateBossBlink(f: Fighter, dtSec: number): boolean {
+  let s = bossBlinkCache.get(f);
+  if (!s) {
+    s = { nextBlinkAt: 1.5 + Math.random() * 3.5, blinkT: 0 };
+    bossBlinkCache.set(f, s);
+  }
+  if (dtSec > 0 && dtSec < 0.5) {
+    if (s.blinkT > 0) {
+      s.blinkT -= dtSec;
+    } else {
+      s.nextBlinkAt -= dtSec;
+      if (s.nextBlinkAt <= 0) {
+        s.blinkT = 0.13;
+        s.nextBlinkAt = 2.5 + Math.random() * 4;
+      }
+    }
+  }
+  return s.blinkT > 0;
+}
+
+function glowEyes(ctx: CanvasRenderingContext2D, hx: number, hy: number, r: number, color: string, closed = false, spacing = 0.42): void {
+  if (closed) {
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.6;
+    ctx.lineCap = 'round';
+    for (const side of [-1, 1] as const) {
+      const ex = hx + side * r * spacing * 0.4 + r * 0.25;
+      ctx.beginPath();
+      ctx.moveTo(ex - r * 0.16, hy - r * 0.05);
+      ctx.lineTo(ex + r * 0.16, hy - r * 0.05);
+      ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
   ctx.save();
   ctx.fillStyle = color;
   ctx.shadowColor = color;
@@ -240,10 +457,24 @@ function glowEyes(ctx: CanvasRenderingContext2D, hx: number, hy: number, r: numb
   ctx.restore();
 }
 
-function simpleEyes(ctx: CanvasRenderingContext2D, hx: number, hy: number, r: number, pupilColor = '#1a1a1a'): void {
+function simpleEyes(ctx: CanvasRenderingContext2D, hx: number, hy: number, r: number, pupilColor = '#1a1a1a', closed = false): void {
   const backX = hx - r * 0.05;
   const frontX = hx + r * 0.5;
   const eyeY = hy - r * 0.08;
+  if (closed) {
+    ctx.save();
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 1.3;
+    ctx.lineCap = 'round';
+    for (const [ex, radius] of [[backX, r * 0.24], [frontX, r * 0.3]] as const) {
+      ctx.beginPath();
+      ctx.moveTo(ex - radius, eyeY);
+      ctx.quadraticCurveTo(ex, eyeY + radius * 0.5, ex + radius, eyeY);
+      ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
   for (const [ex, radius, pupilR] of [[backX, r * 0.24, r * 0.11], [frontX, r * 0.3, r * 0.14]] as const) {
     ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = '#1a1a1a';
@@ -267,6 +498,7 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
   clown: {
     torsoColor: '#e53935', limbColor: '#2b2140', torsoWidth: 24, armWidth: 13, legWidth: 15,
     headColor: '#f2d9c4', headScale: 1.15, auraColor: '#ff4081',
+    shoeStyle: 'clown',
     drawTorsoDetail(ctx, f, m) {
       // Ruffled colorful collar + big buttons down the front.
       const colors = ['#fdd835', '#1e88e5', '#e53935'];
@@ -283,7 +515,7 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
         ctx.fill();
       }
     },
-    drawHead(ctx, f, hx, hy, r, t) {
+    drawHead(ctx, f, hx, hy, r, t, m) {
       // Fuzzy orange hair tufts either side of a bald crown.
       ctx.fillStyle = '#ff6f00';
       for (const side of [-1, 1] as const) {
@@ -310,28 +542,65 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
       ctx.beginPath();
       ctx.ellipse(hx + r * 0.35, hy - r * 0.05, r * 0.5, r * 0.32, 0, 0, Math.PI * 2);
       ctx.fill();
-      simpleEyes(ctx, hx, hy, r);
+      simpleEyes(ctx, hx, hy, r, '#1a1a1a', m.blinkClosed);
       // Big red nose.
       ctx.fillStyle = '#e53935';
       ctx.beginPath();
       ctx.arc(hx + r * 0.78, hy + r * 0.12, r * 0.3, 0, Math.PI * 2);
       ctx.fill();
-      // Wide grin.
-      ctx.strokeStyle = '#c62828';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(hx + r * 0.2, hy + r * 0.35, r * 0.5, 0.1 * Math.PI, 0.7 * Math.PI);
-      ctx.stroke();
-      void f; void t;
-    },
-    drawExtras(ctx, f, m) {
-      // Big clown shoes.
-      ctx.fillStyle = '#fdd835';
-      for (const [lx, ly] of [[m.pose.legFrontX, m.hipY + m.pose.legFrontY], [m.pose.legBackX, m.hipY + m.pose.legBackY]] as const) {
+
+      // Section (character-quality overhaul, point 12): the clown gets a
+      // real, varying face instead of one permanent wide grin — angry
+      // eyebrows while winding up an attack, a startled "o" the instant
+      // it's hit, a worried look while dazed by a banana, back to the
+      // laughing grin otherwise (idle/taunt/telegraph/superpower).
+      if (!m.blinkClosed) {
+        let browAngle = 0;
+        let mouth: 'grin' | 'firm' | 'o' | 'worried' = 'grin';
+        switch (f.anim) {
+          case 'attack': case 'kick': browAngle = 0.4; mouth = 'firm'; break;
+          case 'hit': case 'stagger': case 'knockback': case 'surprised': browAngle = -0.4; mouth = 'o'; break;
+          case 'dazed': browAngle = -0.2; mouth = 'worried'; break;
+          default: browAngle = 0.1; mouth = 'grin';
+        }
+        if (browAngle !== 0) {
+          ctx.strokeStyle = '#6d1b13';
+          ctx.lineWidth = 1.8;
+          ctx.lineCap = 'round';
+          for (const side of [-1, 1] as const) {
+            const bx = hx + (side > 0 ? r * 0.55 : r * 0.05);
+            const by = hy - r * 0.42;
+            const tilt = browAngle * side * r * 0.14;
+            ctx.beginPath();
+            ctx.moveTo(bx - r * 0.18, by + tilt);
+            ctx.lineTo(bx + r * 0.18, by - tilt);
+            ctx.stroke();
+          }
+        }
+        ctx.strokeStyle = '#c62828';
+        ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.ellipse(lx + 4, ly, 15, 6, 0, 0, Math.PI * 2);
-        ctx.fill();
+        switch (mouth) {
+          case 'firm':
+            ctx.moveTo(hx - r * 0.15, hy + r * 0.4);
+            ctx.lineTo(hx + r * 0.55, hy + r * 0.34);
+            ctx.stroke();
+            break;
+          case 'o':
+            ctx.fillStyle = '#6d1b13';
+            ctx.arc(hx + r * 0.25, hy + r * 0.4, r * 0.16, 0, Math.PI * 2);
+            ctx.fill();
+            break;
+          case 'worried':
+            ctx.arc(hx + r * 0.2, hy + r * 0.55, r * 0.35, 1.15 * Math.PI, 1.85 * Math.PI);
+            ctx.stroke();
+            break;
+          default:
+            ctx.arc(hx + r * 0.2, hy + r * 0.35, r * 0.5, 0.1 * Math.PI, 0.7 * Math.PI);
+            ctx.stroke();
+        }
       }
+      void t;
     },
   },
 
@@ -340,6 +609,7 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
   ironTree: {
     torsoColor: '#6d4c2f', limbColor: '#4a3520', torsoWidth: 26, armWidth: 15, legWidth: 17,
     headColor: '#d7a26a', headScale: 1.1, auraColor: '#8d6e63',
+    shoeStyle: 'boot', shoeColor: '#3e2c18',
     drawTorsoDetail(ctx, f, m) {
       // Fur-trimmed vest with a jagged hem.
       ctx.fillStyle = '#efebe9';
@@ -354,7 +624,7 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
       ctx.closePath();
       ctx.fill();
     },
-    drawHead(ctx, f, hx, hy, r) {
+    drawHead(ctx, f, hx, hy, r, t, m) {
       // Bushy braided beard.
       ctx.fillStyle = '#c9a876';
       ctx.beginPath();
@@ -363,7 +633,8 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
       ctx.lineTo(hx + r * 0.7, hy + r * 0.2);
       ctx.closePath();
       ctx.fill();
-      simpleEyes(ctx, hx, hy - r * 0.15, r);
+      simpleEyes(ctx, hx, hy - r * 0.15, r, '#1a1a1a', m.blinkClosed);
+      void t;
       // Horned helmet.
       ctx.fillStyle = '#8d8d8d';
       ctx.beginPath();
@@ -386,6 +657,7 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
   magmaBrute: {
     torsoColor: '#3a1210', limbColor: '#2b0d0c', torsoWidth: 30, armWidth: 18, legWidth: 20,
     headColor: '#3a1210', headScale: 1.05, auraColor: '#ff6d00',
+    handColor: '#5d2b1f', shoeStyle: 'boot', shoeColor: '#2b0d0c',
     drawTorsoDetail(ctx, f, m, t) {
       // Glowing cracks pulsing along the rock body.
       const glow = 0.5 + Math.sin(t * 3) * 0.3;
@@ -398,7 +670,7 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
       ctx.lineTo(m.shoulderX + 4, m.shoulderY + 42);
       ctx.stroke();
     },
-    drawHead(ctx, f, hx, hy, r, t) {
+    drawHead(ctx, f, hx, hy, r, t, m) {
       // No neck — a fused rock lump for a head, glowing eye pits, steam.
       ctx.fillStyle = '#2b0d0c';
       ctx.beginPath();
@@ -408,7 +680,7 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
       ctx.lineTo(hx + r, hy + r * 0.2);
       ctx.closePath();
       ctx.fill();
-      glowEyes(ctx, hx, hy, r, '#ffab40');
+      glowEyes(ctx, hx, hy, r, '#ffab40', m.blinkClosed);
       const steam = (t * 20) % 20;
       ctx.globalAlpha = Math.max(0, 1 - steam / 20) * 0.4;
       ctx.fillStyle = '#bdbdbd';
@@ -431,6 +703,7 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
   frostQueen: {
     torsoColor: '#4fc3f7', limbColor: '#0d47a1', torsoWidth: 22, armWidth: 12, legWidth: 13,
     headColor: '#dcefff', headScale: 1.1, auraColor: '#81d4fa',
+    shoeStyle: 'boot', shoeColor: '#0d47a1',
     drawBack(ctx, f, m, t) {
       // Flowing icy cape.
       const sway = Math.sin(t * 2) * 6;
@@ -443,8 +716,9 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
       ctx.closePath();
       ctx.fill();
     },
-    drawHead(ctx, f, hx, hy, r) {
-      simpleEyes(ctx, hx, hy, r, '#0d47a1');
+    drawHead(ctx, f, hx, hy, r, t, m) {
+      simpleEyes(ctx, hx, hy, r, '#0d47a1', m.blinkClosed);
+      void t;
       // Ice-crystal crown.
       ctx.fillStyle = '#b3e5fc';
       for (let i = -1; i <= 1; i++) {
@@ -471,6 +745,7 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
   chicken: {
     torsoColor: '#fafafa', limbColor: '#ff9800', torsoWidth: 30, armWidth: 8, legWidth: 10,
     headColor: '#fafafa', headScale: 1.0, auraColor: '#ffca28',
+    noHands: true, shoeStyle: 'none',
     drawTorsoDetail(ctx, f, m, t) {
       // Wing feathers instead of arms/hands — a small fan of feather
       // shapes at each shoulder, flapping slightly.
@@ -492,8 +767,9 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
       ctx.closePath();
       ctx.fill();
     },
-    drawHead(ctx, f, hx, hy, r) {
-      simpleEyes(ctx, hx, hy, r);
+    drawHead(ctx, f, hx, hy, r, t, m) {
+      simpleEyes(ctx, hx, hy, r, '#1a1a1a', m.blinkClosed);
+      void t;
       // Red comb.
       ctx.fillStyle = '#e53935';
       for (let i = 0; i < 3; i++) {
@@ -535,6 +811,7 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
   stoneKnight: {
     torsoColor: '#78909c', limbColor: '#546e7a', torsoWidth: 27, armWidth: 15, legWidth: 17,
     headColor: '#90a4ae', headScale: 1.05, auraColor: '#b0bec5',
+    handColor: '#78909c', shoeStyle: 'armored', shoeColor: '#78909c',
     drawTorsoDetail(ctx, f, m) {
       // Armor plate lines.
       ctx.strokeStyle = '#37474f';
@@ -581,6 +858,7 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
   graveWraith: {
     torsoColor: 'rgba(69,90,100,0.75)', limbColor: 'rgba(69,90,100,0.7)', torsoWidth: 20, armWidth: 10, legWidth: 0,
     headColor: '#37474f', headScale: 1.1, auraColor: '#66bb6a', skipDefaultHead: false,
+    handColor: 'rgba(197,225,165,0.55)',
     drawBack(ctx, f, m, t) {
       // Tattered hem instead of legs — the wraith floats.
       const sway = Math.sin(t * 1.6) * 5;
@@ -602,8 +880,9 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
     drawTorsoDetail(ctx) {
       void ctx;
     },
-    drawHead(ctx, f, hx, hy, r) {
-      glowEyes(ctx, hx, hy, r, '#a5d6a7');
+    drawHead(ctx, f, hx, hy, r, t, m) {
+      glowEyes(ctx, hx, hy, r, '#a5d6a7', m.blinkClosed);
+      void t;
       // Hood.
       ctx.fillStyle = 'rgba(55,71,79,0.85)';
       ctx.beginPath();
@@ -628,6 +907,7 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
   stormTitan: {
     torsoColor: '#37474f', limbColor: '#455a64', torsoWidth: 30, armWidth: 16, legWidth: 18,
     headColor: '#607d8b', headScale: 1.0, auraColor: '#fff59d', skipDefaultHead: true,
+    handColor: '#78909c', shoeStyle: 'metal', shoeColor: '#455a64',
     drawTorsoDetail(ctx, f, m) {
       // Rivets + a chest core light.
       ctx.fillStyle = '#263238';
@@ -680,6 +960,7 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
   chaosHydra: {
     torsoColor: '#4a148c', limbColor: '#6a1b9a', torsoWidth: 16, armWidth: 9, legWidth: 10,
     headColor: '#ba68c8', headScale: 1.3, auraColor: '#ce93d8',
+    handColor: '#ce93d8', shoeStyle: 'claw', shoeColor: '#6a1b9a',
     drawHead(ctx, f, hx, hy, r) {
       // Big bald head, huge black almond eyes, no nose/mouth.
       ctx.fillStyle = '#1a1a1a';
@@ -716,6 +997,9 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
   windelNemesis: {
     torsoColor: '#0d0d10', limbColor: '#0d0d10', torsoWidth: 20, armWidth: 11, legWidth: 12,
     headColor: '#161618', headScale: 1.0, auraColor: '#7c1fa2',
+    // A touch lighter than the near-black torso so the gripping hand
+    // still reads as its own shape against the shadow-ninja silhouette.
+    handColor: '#3a3a42', shoeStyle: 'boot', shoeColor: '#0d0d10',
     drawBack(ctx, f, m, t) {
       const sway = Math.sin(t * 3) * 5;
       ctx.fillStyle = 'rgba(60,10,80,0.5)';
@@ -727,11 +1011,12 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
       ctx.closePath();
       ctx.fill();
     },
-    drawHead(ctx, f, hx, hy, r) {
+    drawHead(ctx, f, hx, hy, r, t, m) {
       // Mask covering the lower face, glowing red eyes in the slit.
       ctx.fillStyle = '#161618';
       ctx.fillRect(hx - r, hy - r * 0.15, r * 2, r * 0.9);
-      glowEyes(ctx, hx, hy - r * 0.1, r, '#ff1744');
+      glowEyes(ctx, hx, hy - r * 0.1, r, '#ff1744', m.blinkClosed);
+      void t;
     },
     drawExtras(ctx, f, m, t) {
       ctx.save();
@@ -749,8 +1034,10 @@ const BOSS_COSTUMES: Record<string, BossCostume> = {
 const DEFAULT_COSTUME: BossCostume = {
   torsoColor: '#2c2c2c', limbColor: '#2c2c2c', torsoWidth: 18, armWidth: 10, legWidth: 11,
   headColor: '#2c2c2c', headScale: 1, auraColor: '#ffffff',
-  drawHead(ctx, f, hx, hy, r) {
-    simpleEyes(ctx, hx, hy, r);
+  shoeStyle: 'boot', shoeColor: '#2c2c2c',
+  drawHead(ctx, f, hx, hy, r, t, m) {
+    simpleEyes(ctx, hx, hy, r, '#1a1a1a', m.blinkClosed);
+    void t;
   },
 };
 
@@ -865,7 +1152,8 @@ export function renderBoss(ctx: CanvasRenderingContext2D, f: Fighter, dtSec = 0)
   const t = f.animTimeMs / 1000;
 
   const costume = BOSS_COSTUMES[f.bossDefId ?? ''] ?? DEFAULT_COSTUME;
-  const m: Metrics = { hipY, shoulderY, shoulderX, headX, headY, headR: headR * costume.headScale, pose };
+  const blinkClosed = updateBossBlink(f, dtSec);
+  const m: Metrics = { hipY, shoulderY, shoulderX, headX, headY, headR: headR * costume.headScale, pose, blinkClosed };
 
   if (pose.auraPulse > 0) {
     drawChargeAura(ctx, shoulderX, (shoulderY + hipY) / 2, costume.auraColor, pose.auraPulse, hipY - shoulderY);
@@ -876,34 +1164,26 @@ export function renderBoss(ctx: CanvasRenderingContext2D, f: Fighter, dtSec = 0)
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
-  // Legs.
-  ctx.strokeStyle = costume.limbColor;
-  ctx.lineWidth = costume.legWidth;
+  // Legs — filled, tapered, jointed at the knee, each ending in a real
+  // shoe silhouette per costume (viking boots, knight sabatons, robot
+  // feet, ...) instead of the old bare thin-line ends.
+  const shoeStyle = costume.shoeStyle ?? 'none';
+  const shoeColor = costume.shoeColor ?? costume.limbColor;
   if (costume.legWidth > 0) {
-    ctx.beginPath();
-    ctx.moveTo(0, hipY);
-    ctx.lineTo(pose.legBackX, hipY + pose.legBackY);
-    ctx.moveTo(0, hipY);
-    ctx.lineTo(pose.legFrontX, hipY + pose.legFrontY);
-    ctx.stroke();
+    drawLimb(ctx, 0, hipY, pose.legBackX, hipY + pose.legBackY, costume.legWidth, costume.legWidth * 0.72, 0.15, -1, costume.limbColor);
+    drawBossShoe(ctx, pose.legBackX, hipY + pose.legBackY, footTiltAngle(pose.legBackX, pose.legBackY), shoeStyle, shoeColor);
+    drawLimb(ctx, 0, hipY, pose.legFrontX, hipY + pose.legFrontY, costume.legWidth, costume.legWidth * 0.72, 0.15, -1, costume.limbColor);
+    drawBossShoe(ctx, pose.legFrontX, hipY + pose.legFrontY, footTiltAngle(pose.legFrontX, pose.legFrontY), shoeStyle, shoeColor);
   }
 
-  // Torso (thick fill-read stroke — a real body, not a thin wire).
-  ctx.strokeStyle = costume.torsoColor;
-  ctx.lineWidth = costume.torsoWidth;
-  ctx.beginPath();
-  ctx.moveTo(0, hipY);
-  ctx.lineTo(shoulderX, shoulderY);
-  ctx.stroke();
+  // Torso (thick fill-read tapered shape — a real body, not a thin wire).
+  drawTaperedSegment(ctx, 0, hipY, shoulderX, shoulderY, costume.torsoWidth * 0.92, costume.torsoWidth, costume.torsoColor);
   costume.drawTorsoDetail?.(ctx, f, m, t);
 
-  // Back arm.
-  ctx.strokeStyle = costume.limbColor;
-  ctx.lineWidth = costume.armWidth;
-  ctx.beginPath();
-  ctx.moveTo(shoulderX, shoulderY);
-  ctx.lineTo(shoulderX + pose.armBackX, shoulderY + pose.armBackY);
-  ctx.stroke();
+  // Back arm + hand.
+  const handColor = costume.handColor ?? HAND_COLOR;
+  const backArm = drawLimb(ctx, shoulderX, shoulderY, shoulderX + pose.armBackX, shoulderY + pose.armBackY, costume.armWidth, costume.armWidth * 0.75, 0.13, 1, costume.limbColor);
+  if (!costume.noHands) drawHand(ctx, shoulderX + pose.armBackX, shoulderY + pose.armBackY, backArm.dirX, backArm.dirY, costume.armWidth * 0.45, handColor);
 
   // Head.
   if (!costume.skipDefaultHead) {
@@ -914,13 +1194,10 @@ export function renderBoss(ctx: CanvasRenderingContext2D, f: Fighter, dtSec = 0)
   }
   costume.drawHead(ctx, f, shoulderX + headX, headY, headR * costume.headScale, t, m);
 
-  // Front arm + weapon.
-  ctx.strokeStyle = costume.limbColor;
-  ctx.lineWidth = costume.armWidth;
-  ctx.beginPath();
-  ctx.moveTo(shoulderX, shoulderY);
-  ctx.lineTo(shoulderX + pose.armFrontX, shoulderY + pose.armFrontY);
-  ctx.stroke();
+  // Front arm + hand + weapon (weapon drawn on top of the hand so it
+  // reads as gripped, matching the player/normal-enemy rig).
+  const frontArm = drawLimb(ctx, shoulderX, shoulderY, shoulderX + pose.armFrontX, shoulderY + pose.armFrontY, costume.armWidth, costume.armWidth * 0.75, 0.13, 1, costume.limbColor);
+  if (!costume.noHands) drawHand(ctx, shoulderX + pose.armFrontX, shoulderY + pose.armFrontY, frontArm.dirX, frontArm.dirY, costume.armWidth * 0.45, handColor);
   drawWeaponInHand(ctx, f, shoulderX + pose.armFrontX, shoulderY + pose.armFrontY, pose.armFrontX, pose.armFrontY);
 
   costume.drawExtras?.(ctx, f, m, t);
