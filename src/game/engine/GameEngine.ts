@@ -1213,8 +1213,11 @@ export class GameEngine {
         this.enemy.setAnim('knockback', true);
         this.enemy.hitstunRemainingMs = Math.max(this.enemy.hitstunRemainingMs, 320);
         applyKnockback(this.enemy.body, this.player.facing, 140, 0.35);
-        this.particles.burst({ x: this.enemy.body.pos.x, y: this.enemy.body.groundY - 40 * this.enemy.scale }, 6, {
-          color: '#ff7043', shape: 'flame', size: 7, life: 0.35, maxLife: 0.35, gravity: -60,
+        // Sized to match the now much bigger flame jet in
+        // fireSuperpowerVisual — the enemy should look genuinely wrapped
+        // in fire for a moment, not dotted with a few tiny embers.
+        this.particles.burst({ x: this.enemy.body.pos.x, y: this.enemy.body.groundY - 40 * this.enemy.scale }, 10, {
+          color: '#ff7043', shape: 'flame', size: 42, life: 0.5, maxLife: 0.5, gravity: -60,
         });
         break;
       case 'ice':
@@ -2323,24 +2326,29 @@ export class GameEngine {
         });
         break;
       case 'chili': {
-        // Movement-quality pass 3: chili is a real flame-lick shape now
-        // (see ParticleSystem's 'flame' case), not an ellipse ("drop") that
-        // just reads as another colored blob. A longer flicker sequence
-        // (more waves, layered outer/inner colors, a bright core) with an
-        // outward-racing leading edge so there's a clear reach, plus a few
-        // rising sparks for texture.
-        for (let wave = 0; wave < 6; wave++) {
+        // Quality pass: the flame must actually reach and visually engulf
+        // the enemy, not just flicker a short distance in front of the
+        // character — sizes are ~6x the original (huge overlapping flame
+        // shapes instead of small licks) and each wave's reach now scales
+        // to the real distance to the enemy (capped so it never overshoots
+        // past them) instead of a fixed short per-wave step, so the fire
+        // genuinely travels the full gap and wraps around the target.
+        const targetDist = this.enemy
+          ? Math.min(280, Math.max(60, distance({ x: originX, y: originY }, this.enemy.body.pos)))
+          : 140;
+        const waveCount = 7;
+        for (let wave = 0; wave < waveCount; wave++) {
           window.setTimeout(() => {
             if (!this.enemy) return;
-            const reach = wave * 15;
+            const reach = (targetDist * (wave + 1)) / waveCount;
             const wx = originX + Math.cos(dirAngle) * reach;
             const wy = originY + Math.sin(dirAngle) * reach;
-            this.particles.burstDirectional({ x: wx, y: wy }, 9, dirAngle, 0.3, {
+            this.particles.burstDirectional({ x: wx, y: wy }, 8, dirAngle, 0.45, {
               color: wave % 2 === 0 ? '#ff5722' : '#ffc107',
-              shape: 'flame', size: 14 - wave, life: 0.4, maxLife: 0.4, gravity: -70,
+              shape: 'flame', size: 90 - wave * 6, life: 0.55, maxLife: 0.55, gravity: -70,
             });
-            this.particles.burstDirectional({ x: wx, y: wy }, 4, dirAngle, 0.5, {
-              color: '#ffee58', shape: 'spark', size: 6, life: 0.24, maxLife: 0.24, gravity: -140,
+            this.particles.burstDirectional({ x: wx, y: wy }, 4, dirAngle, 0.6, {
+              color: '#ffee58', shape: 'spark', size: 16, life: 0.3, maxLife: 0.3, gravity: -140,
             });
           }, wave * 55);
         }
