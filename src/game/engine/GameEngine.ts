@@ -38,6 +38,9 @@ export interface HudState {
   livesRemaining: number;
   maxLives: number;
   hasBonusWeapon: boolean;
+  airSupportUnlocked: boolean;
+  airSupportCooldownMs: number;
+  hasStorkBonusWeapon: boolean;
   weaponId: WeaponId;
   bossIntroText: string;
   levelWonInfo: { score: number; leveledUp: boolean } | null;
@@ -59,7 +62,7 @@ interface Projectile {
 
 interface Hazard {
   id: number;
-  kind: 'egg' | 'balloon' | 'banana' | 'bonusBomb' | 'fireWave' | 'frostNova';
+  kind: 'egg' | 'balloon' | 'banana' | 'bonusBomb' | 'fireWave' | 'frostNova' | 'diaperBomb';
   pos: { x: number; y: number };
   vel: { x: number; y: number };
   timer: number;
@@ -68,12 +71,43 @@ interface Hazard {
   triggered: boolean;
 }
 
+// Humorous effects pass: the stork-with-baby flying entity shared by the
+// rare player-triggered "air support" ability (pure distraction, no damage)
+// and the separate one-time "Storch & Baby" bonus weapon (drops a real
+// diaper-bomb hazard). One flight path system, two different payloads —
+// keeps the flight/rendering code from being duplicated between them.
+type StorkVariant = 'crossFly' | 'circle';
+type StorkMode = 'airSupport' | 'bonusWeapon';
+
+interface StorkFlight {
+  variant: StorkVariant;
+  mode: StorkMode;
+  elapsedMs: number;
+  totalMs: number;
+  dir: 1 | -1; // entry/travel side
+  targetX: number; // enemy x captured when the flight starts — a fixed
+  // flight path reads clearer than a homing stork chasing a moving target.
+  flightY: number;
+  effectFired: boolean;
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
 // Section 8 (quality update): campaign levels that grant the player a
 // one-time throwable bonus weapon — a handful of deliberate milestones,
 // not every level, and never boss levels (so the reward doesn't compete
 // for attention with a boss intro). Persisted per-run in
 // save.bonusWeaponMilestonesClaimed so it's only ever granted once.
 const BONUS_WEAPON_MILESTONE_LEVELS = [8, 22, 38];
+
+// Humorous effects pass: a separate, later-game milestone list for the
+// "Storch & Baby" diaper-bomb bonus weapon — deliberately rarer/later than
+// the plain bonus bomb above, per the requested early/mid/late/very-late
+// progression (normal weapons -> first bonus weapons -> air support ->
+// especially strong/rare air attacks).
+const STORK_BONUS_MILESTONE_LEVELS = [30, 44];
 
 // Section 6 (polish pass): a short-lived, floating comic-book-style sound
 // effect ("Faaarrt…") spawned next to a fighter's rear on every fart.
@@ -144,6 +178,15 @@ export class GameEngine {
   // current level (see handlePlayerDefeated) instead of ending the run.
   static readonly MAX_LIVES = 3;
   livesRemaining = GameEngine.MAX_LIVES;
+
+  // Humorous effects pass: air support is a rare, player-triggered
+  // distraction — unlocked from this campaign level onward, gated further
+  // by a long cooldown so it stays a special-occasion tool, never a
+  // routine every-fight button.
+  static readonly AIR_SUPPORT_UNLOCK_LEVEL = 18;
+  static readonly AIR_SUPPORT_COOLDOWN_MS = 42000;
+  airSupportCooldownMs = 0;
+  storkFlight: StorkFlight | null = null;
 
   particles = new ParticleSystem();
   shake = new ScreenShake();
@@ -252,6 +295,7 @@ export class GameEngine {
     this.bossDefId = level.bossId ?? null;
     this.projectiles = [];
     this.hazards = [];
+    this.storkFlight = null;
 
     // Section 1: start with clear daylight between the two fighters rather
     // than nearly toe-to-toe, so the opening seconds actually feel like a
@@ -300,6 +344,14 @@ export class GameEngine {
       this.player.hasBonusWeapon = true;
       useAppStore.getState().claimBonusWeaponMilestone(index);
       this.showToast('🎁 BONUS-WAFFE ERHALTEN!', 2000);
+    }
+
+    // Humorous effects pass: same one-time-grant pattern, later in the
+    // campaign, for the "Storch & Baby" diaper-bomb bonus weapon.
+    if (STORK_BONUS_MILESTONE_LEVELS.includes(index) && !this.save.storkBonusMilestonesClaimed.includes(index)) {
+      this.player.hasStorkBonusWeapon = true;
+      useAppStore.getState().claimStorkBonusMilestone(index);
+      this.showToast('🦢👶 STORCH & BABY ERHALTEN!', 2000);
     }
 
     this.levelWonHandled = false;
@@ -422,6 +474,156 @@ export class GameEngine {
     }, 150);
   }
 
+  // Humorous effects pass: air support is a rare, announced distraction —
+  // never a normal-fight tool. Locked out until the campaign level unlock,
+  // gated by a long cooldown, and it never deals damage: a stork flies
+  // through (or circles above) the arena and briefly surprises/distracts
+  // the boss, giving a short tactical opening rather than an automatic win.
+  useAirSupport(): void {
+    if (this.phase !== 'playing') return;
+    if (this.levelIndex < GameEngine.AIR_SUPPORT_UNLOCK_LEVEL) return;
+    if (this.airSupportCooldownMs > 0) return;
+    if (!this.enemy || this.enemy.isDead) return;
+    if (this.storkFlight) return;
+    this.airSupportCooldownMs = GameEngine.AIR_SUPPORT_COOLDOWN_MS;
+    this.showToast('🦢 LUFTUNTERSTÜTZUNG IM ANFLUG!', 1400);
+    window.setTimeout(() => {
+      if (this.phase !== 'playing' && this.phase !== 'levelWon') return;
+      this.startStorkFlight('airSupport');
+    }, 900);
+  }
+
+  // The one-time "Storch & Baby" bonus weapon: same flight system as air
+  // support, but this pass drops a real diaper-bomb hazard on the target
+  // instead of a pure distraction — a tactical bonus, not a normal attack,
+  // consumed on use.
+  throwStorkBonusWeapon(): void {
+    if (this.phase !== 'playing') return;
+    if (!this.player.hasStorkBonusWeapon) return;
+    if (this.storkFlight) return;
+    this.player.hasStorkBonusWeapon = false;
+    this.showToast('🦢👶 STORCH IM ANFLUG!', 1400);
+    window.setTimeout(() => {
+      if (this.phase !== 'playing' && this.phase !== 'levelWon') return;
+      this.startStorkFlight('bonusWeapon');
+    }, 700);
+  }
+
+  private startStorkFlight(mode: StorkMode): void {
+    if (!this.enemy || this.enemy.isDead) return;
+    // The bonus weapon always flies a clean straight pass over the target
+    // (it needs to reliably drop its payload); air support randomly picks
+    // between the two variants for variety.
+    const variant: StorkVariant = mode === 'bonusWeapon'
+      ? 'crossFly'
+      : (Math.random() < 0.5 ? 'crossFly' : 'circle');
+    const dir: 1 | -1 = Math.random() < 0.5 ? 1 : -1;
+    this.storkFlight = {
+      variant,
+      mode,
+      elapsedMs: 0,
+      totalMs: variant === 'crossFly' ? 2800 : 2600,
+      dir,
+      targetX: this.enemy.body.pos.x,
+      flightY: this.layout.groundY - this.layout.height * 0.4,
+      effectFired: false,
+    };
+    audio.play('storkFlyby');
+  }
+
+  /** World-space position of the currently flying stork, given its
+   * elapsed/total progress. crossFly flies a straight pass edge-to-edge;
+   * circle flies in, loops twice above the target, then flies back out the
+   * same side — both are real traversed paths, never a fade-in-place. */
+  private storkPosition(flight: StorkFlight): { x: number; y: number } {
+    const p = Math.min(1, flight.elapsedMs / flight.totalMs);
+    const margin = 70;
+    if (flight.variant === 'crossFly') {
+      const startX = flight.dir > 0 ? this.layout.minX - margin : this.layout.maxX + margin;
+      const endX = flight.dir > 0 ? this.layout.maxX + margin : this.layout.minX - margin;
+      return {
+        x: lerp(startX, endX, p),
+        y: flight.flightY + Math.sin(p * Math.PI * 2) * 10,
+      };
+    }
+    const entryX = flight.dir > 0 ? this.layout.minX - margin : this.layout.maxX + margin;
+    const inEnd = 0.22;
+    const outStart = 0.78;
+    if (p < inEnd) {
+      const q = p / inEnd;
+      return { x: lerp(entryX, flight.targetX, q), y: lerp(flight.flightY, flight.flightY - 12, q) };
+    }
+    if (p > outStart) {
+      const q = (p - outStart) / (1 - outStart);
+      return { x: lerp(flight.targetX, entryX, q), y: lerp(flight.flightY - 12, flight.flightY, q) };
+    }
+    const loopP = (p - inEnd) / (outStart - inEnd);
+    const angle = loopP * Math.PI * 4;
+    const radius = 55;
+    return {
+      x: flight.targetX + Math.cos(angle) * radius,
+      y: flight.flightY - 12 + Math.sin(angle) * radius * 0.35,
+    };
+  }
+
+  private updateStork(dtMs: number): void {
+    const flight = this.storkFlight;
+    if (!flight) return;
+    flight.elapsedMs += dtMs;
+    const p = flight.elapsedMs / flight.totalMs;
+
+    // Fire the payload once, right as the stork is over (or looping above)
+    // the target — never before it visibly arrives.
+    if (!flight.effectFired) {
+      const { x } = this.storkPosition(flight);
+      const overTarget = flight.variant === 'crossFly'
+        ? Math.abs(x - flight.targetX) < 45
+        : p > 0.28;
+      if (overTarget) {
+        flight.effectFired = true;
+        if (flight.mode === 'airSupport') {
+          this.triggerAirSupportEffect();
+        } else {
+          this.dropDiaperBomb(flight);
+        }
+      }
+    }
+
+    if (p >= 1) this.storkFlight = null;
+  }
+
+  private triggerAirSupportEffect(): void {
+    if (!this.enemy || this.enemy.isDead) return;
+    const enemy = this.enemy;
+    audio.play('surprise');
+    this.particles.burst({ x: enemy.body.pos.x, y: enemy.body.groundY - 95 }, 12, {
+      color: '#ffffff', shape: 'circle', size: 4, life: 0.5, maxLife: 0.5, gravity: -30,
+    });
+    this.spawnComicText('?!', enemy.body.pos.x, enemy.body.groundY - 140, '#fff59d');
+    enemy.setAnim('surprised', true);
+    // Short tactical distraction, not a stun-lock — matches the same scale
+    // as a heavy hit's stagger window, never longer.
+    const distractMs = 850;
+    enemy.hitstunRemainingMs = Math.max(enemy.hitstunRemainingMs, distractMs);
+    this.showToast('Der Storch lenkt ab!', 1000);
+  }
+
+  private dropDiaperBomb(flight: StorkFlight): void {
+    const { x, y } = this.storkPosition(flight);
+    hazardCounter += 1;
+    this.hazards.push({
+      id: hazardCounter,
+      kind: 'diaperBomb',
+      pos: { x, y },
+      vel: { x: 0, y: 60 },
+      timer: 1400,
+      radius: 46,
+      owner: 'player',
+      triggered: false,
+    });
+    audio.play('weaponSwing');
+  }
+
   useSuperpower(id: SuperpowerId): void {
     if (this.phase !== 'playing') return;
     if (!this.save.unlockedSuperpowers.includes(id)) return;
@@ -469,15 +671,31 @@ export class GameEngine {
     this.dealDamageTo(this.enemy, dmg, false);
     this.addScore(BALANCE.score.superpowerHit);
 
+    // Humorous effects pass (point 7): every elemental power gets its own
+    // brief, visible reaction on top of its mechanical effect — not just a
+    // status overlay — so a hit clearly reads as "the enemy just got hit by
+    // fire/ice/gas" rather than a silent stat change. Kept short (a single
+    // flinch beat) so it stays a readable reaction, never an extra stun.
     switch (id) {
       case 'gasCloud':
         this.enemy.applySlow(0.55, def.effectDurationMs);
+        this.enemy.setAnim('hit', true);
+        this.enemy.hitstunRemainingMs = Math.max(this.enemy.hitstunRemainingMs, 260);
+        applyKnockback(this.enemy.body, this.player.facing, 60, 0.3);
+        this.spawnComicText('Pfui!', this.enemy.body.pos.x, this.enemy.body.groundY - 130, '#aed581');
         break;
       case 'chili':
         this.enemy.applyDot(6, def.effectDurationMs, '#ff5722');
+        // Fire: a real backward flinch, not just a damage-over-time tick —
+        // the enemy visibly backs away from the flame.
+        this.enemy.setAnim('knockback', true);
+        this.enemy.hitstunRemainingMs = Math.max(this.enemy.hitstunRemainingMs, 320);
+        applyKnockback(this.enemy.body, this.player.facing, 140, 0.35);
         break;
       case 'ice':
         this.enemy.applyFreeze(def.effectDurationMs);
+        this.enemy.setAnim('hit', true);
+        this.enemy.hitstunRemainingMs = Math.max(this.enemy.hitstunRemainingMs, 260);
         break;
       case 'electro':
         this.enemy.applyStun(def.effectDurationMs);
@@ -693,6 +911,8 @@ export class GameEngine {
 
     this.updateProjectiles(dtSec);
     this.updateHazards(dtSec);
+    this.updateStork(dtMs);
+    if (this.airSupportCooldownMs > 0) this.airSupportCooldownMs -= dtMs;
 
     for (const [id, ms] of this.superpowerCooldowns) {
       if (ms > 0) this.superpowerCooldowns.set(id, Math.max(0, ms - dtMs));
@@ -767,7 +987,11 @@ export class GameEngine {
         enemy.setAnim('idle');
       } else if ((enemy.anim === 'attack' || enemy.anim === 'kick') && enemy.attackCooldownRemainingMs <= 0) {
         enemy.setAnim('idle');
-      } else if (enemy.anim === 'hit' || enemy.anim === 'stagger') {
+      } else if (
+        enemy.anim === 'hit' || enemy.anim === 'stagger'
+        || (enemy.anim === 'dazed' && enemy.dazedUntilMs <= 0)
+        || (enemy.anim === 'surprised' && enemy.hitstunRemainingMs <= 0)
+      ) {
         enemy.setAnim('idle');
       }
       enemy.facing = this.player.body.pos.x >= enemy.body.pos.x ? 1 : -1;
@@ -884,6 +1108,9 @@ export class GameEngine {
     const hit = resolveHit(attacker, weapon, isKick, perfect);
     const dmg = applyDefense(hit.damage, defender.stats.defense);
     this.dealDamageTo(defender, dmg, true, isKick);
+    // A follow-up hit lands the real punish already — end the banana daze
+    // (birds) now rather than have it linger under the hit/knockback pose.
+    defender.dazedUntilMs = 0;
 
     const dir = Math.sign(defender.body.pos.x - attacker.body.pos.x) || attacker.facing;
     applyKnockback(defender.body, dir, hit.knockback, hit.tier === 'critical' ? 0.55 : 0.3);
@@ -1072,7 +1299,7 @@ export class GameEngine {
     for (let i = this.hazards.length - 1; i >= 0; i--) {
       const h = this.hazards[i];
       h.timer -= dtSec * 1000;
-      if (h.kind === 'bonusBomb') h.vel.y += BALANCE.physics.gravity * 0.7 * dtSec;
+      if (h.kind === 'bonusBomb' || h.kind === 'diaperBomb') h.vel.y += BALANCE.physics.gravity * 0.7 * dtSec;
       h.pos.x += h.vel.x * dtSec;
       h.pos.y += h.vel.y * dtSec;
       if (h.kind === 'balloon') {
@@ -1090,7 +1317,7 @@ export class GameEngine {
       }
 
       if ((h.kind !== 'banana' && h.timer <= 0) || h.triggered) {
-        if ((h.kind === 'egg' || h.kind === 'bonusBomb' || h.kind === 'frostNova') && h.timer <= 0 && !h.triggered) {
+        if ((h.kind === 'egg' || h.kind === 'bonusBomb' || h.kind === 'frostNova' || h.kind === 'diaperBomb') && h.timer <= 0 && !h.triggered) {
           this.triggerHazard(h, null);
         }
         this.hazards.splice(i, 1);
@@ -1124,11 +1351,17 @@ export class GameEngine {
       }
     } else if (h.kind === 'banana') {
       if (directTarget && directTarget.kind !== 'player') {
+        // Humorous effects pass: a real slip, not a generic stagger — legs
+        // fly out, the enemy briefly falls, and classic cartoon birds circle
+        // its head while it's dazed. Short duration (helpful, not
+        // overpowered): just long enough for a free follow-up hit.
         this.particles.burst(h.pos, 8, { color: '#fdd835', shape: 'spark' });
         audio.play('hit');
-        directTarget.setAnim('stagger', true);
-        directTarget.hitstunRemainingMs = 700;
-        applyKnockback(directTarget.body, directTarget.facing, 180, 0.5);
+        directTarget.setAnim('dazed', true);
+        const dazeMs = 1100;
+        directTarget.hitstunRemainingMs = dazeMs;
+        directTarget.dazedUntilMs = dazeMs;
+        applyKnockback(directTarget.body, directTarget.facing, 140, 0.5);
         this.addScore(400);
         this.showToast('AUSGERUTSCHT!');
       }
@@ -1177,6 +1410,26 @@ export class GameEngine {
       if (!target.isDead && distance(h.pos, target.body.pos) < h.radius) {
         this.dealDamageTo(target, applyDefense(16, target.stats.defense), false);
         target.applySlow(0.5, 1800);
+      }
+    } else if (h.kind === 'diaperBomb') {
+      // The "Storch & Baby" bonus weapon's payload — a real thrown/dropped
+      // object with a visible cartoon impact, not just a damage number. A
+      // tactical bonus (moderate damage + a brief distraction), never an
+      // automatic win — the fight still has to be finished by hand.
+      this.particles.burst(h.pos, 16, { color: '#fff9c4', shape: 'circle', size: 8, life: 0.5, maxLife: 0.5, gravity: 40 });
+      this.particles.burst(h.pos, 10, { color: '#8d6e63', shape: 'dust', size: 7, life: 0.5, maxLife: 0.5, gravity: 200 });
+      audio.play('diaperSplat');
+      this.shake.add(0.35);
+      if (directTarget) {
+        this.dealDamageTo(directTarget, applyDefense(24, directTarget.stats.defense), false);
+        directTarget.setAnim('surprised', true);
+        directTarget.hitstunRemainingMs = Math.max(directTarget.hitstunRemainingMs, 900);
+        applyKnockback(directTarget.body, directTarget.facing, 120, 0.4);
+        this.spawnComicText('PLATSCH!', h.pos.x, h.pos.y - 20, '#fff59d');
+        this.addScore(500);
+        this.showToast('VOLLTREFFER MIT DER WINDEL!');
+      } else {
+        this.showToast('Die Windel verfehlt knapp...');
       }
     }
   }
@@ -1340,6 +1593,7 @@ export class GameEngine {
     fighters.sort((a, b) => a.body.pos.y - b.body.pos.y);
     for (const f of fighters) (f.kind === 'boss' ? renderBoss : renderFighter)(ctx, f, dtSec);
 
+    this.renderStork(ctx);
     this.particles.render(ctx);
     this.renderComicTexts(ctx);
     ctx.restore();
@@ -1352,6 +1606,113 @@ export class GameEngine {
     ctx.beginPath();
     ctx.arc(boss.body.pos.x, this.layout.groundY - 130 * boss.scale, 10, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
+  }
+
+  // Humorous effects pass: a real cartoon stork carrying a baby bundle,
+  // flying an actual traversed path (see storkPosition) rather than
+  // fading in/out in place — flapping wings, trailing legs, a baby peeking
+  // out of a slung cloth sack beneath the beak.
+  private renderStork(ctx: CanvasRenderingContext2D): void {
+    const flight = this.storkFlight;
+    if (!flight) return;
+    const { x, y } = this.storkPosition(flight);
+    const t = flight.elapsedMs / 1000;
+    const facing: 1 | -1 = flight.variant === 'crossFly'
+      ? (flight.dir > 0 ? 1 : -1)
+      : (Math.cos(t * 3) > 0 ? 1 : -1);
+    const flapPhase = Math.sin(t * 11);
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(facing, 1);
+
+    // Baby bundle, slung beneath the beak on a short cloth strap.
+    ctx.strokeStyle = '#8d6e63';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(16, 4);
+    ctx.lineTo(15, 16);
+    ctx.stroke();
+    ctx.fillStyle = '#90caf9';
+    ctx.beginPath();
+    ctx.ellipse(15, 22, 9, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#5c8fc7';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.fillStyle = '#ffe0b2';
+    ctx.beginPath();
+    ctx.arc(19, 18, 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Trailing legs.
+    ctx.strokeStyle = '#e64a19';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-4, 9); ctx.lineTo(-9, 20);
+    ctx.moveTo(-1, 10); ctx.lineTo(-4, 21);
+    ctx.stroke();
+
+    // Rear wing (flaps opposite phase, drawn behind the body).
+    ctx.fillStyle = '#eceff1';
+    ctx.save();
+    ctx.rotate(-0.3 - flapPhase * 0.35);
+    ctx.beginPath();
+    ctx.ellipse(-4, -2, 20, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#37474f';
+    ctx.beginPath();
+    ctx.ellipse(-16, -2, 7, 3.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Body.
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 17, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#cfd8dc';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Neck + head + beak.
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 8;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(12, -4);
+    ctx.quadraticCurveTo(20, -14, 16, -18);
+    ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(16, -18, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#212121';
+    ctx.beginPath();
+    ctx.arc(18, -20, 0.9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ff7043';
+    ctx.beginPath();
+    ctx.moveTo(20, -18);
+    ctx.lineTo(31, -16);
+    ctx.lineTo(20, -15);
+    ctx.closePath();
+    ctx.fill();
+
+    // Front wing (flaps toward camera, drawn on top).
+    ctx.fillStyle = '#f5f5f5';
+    ctx.save();
+    ctx.rotate(0.25 + flapPhase * 0.4);
+    ctx.beginPath();
+    ctx.ellipse(3, -3, 21, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#37474f';
+    ctx.beginPath();
+    ctx.ellipse(-10, -4, 8, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
     ctx.restore();
   }
 
@@ -1437,6 +1798,27 @@ export class GameEngine {
         ctx.ellipse(i * 16, -10 + wob * 0.4, 18, 26 + wob, 0, 0, Math.PI * 2);
         ctx.fill();
       }
+    } else if (h.kind === 'diaperBomb') {
+      // A real cartoon diaper, folded and tabbed, tumbling as it falls —
+      // instantly recognizable, matching the weapon's own name/flavor.
+      ctx.rotate(h.pos.y * 0.03);
+      ctx.fillStyle = '#fdfdfd';
+      ctx.strokeStyle = '#cfd8dc';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, -12);
+      ctx.lineTo(11, 8);
+      ctx.lineTo(0, 14);
+      ctx.lineTo(-11, 8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      // side tabs
+      ctx.fillStyle = '#ffca28';
+      ctx.beginPath();
+      ctx.ellipse(-9, 4, 3.5, 2.2, 0.4, 0, Math.PI * 2);
+      ctx.ellipse(9, 4, 3.5, 2.2, -0.4, 0, Math.PI * 2);
+      ctx.fill();
     } else if (h.kind === 'frostNova') {
       // Expanding icy ring — grows visibly as its fuse burns down so the
       // player can see exactly how much time/space they have to escape it.
@@ -1484,6 +1866,9 @@ export class GameEngine {
       livesRemaining: this.livesRemaining,
       maxLives: GameEngine.MAX_LIVES,
       hasBonusWeapon: this.player.hasBonusWeapon,
+      airSupportUnlocked: this.levelIndex >= GameEngine.AIR_SUPPORT_UNLOCK_LEVEL,
+      airSupportCooldownMs: Math.max(0, this.airSupportCooldownMs),
+      hasStorkBonusWeapon: this.player.hasStorkBonusWeapon,
       weaponId: this.player.weaponId,
       bossIntroText: this.bossDefId ? BOSSES[this.bossDefId].introText : '',
       levelWonInfo: this.phase === 'levelWon' ? { score: this.score, leveledUp: true } : null,

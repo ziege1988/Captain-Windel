@@ -18,6 +18,11 @@ export interface SaveData {
   // level doesn't re-grant it. Reset alongside the rest of a run's
   // progress on a full Game Over (see appStore.finishRun).
   bonusWeaponMilestonesClaimed: number[];
+  // Humorous effects pass: separate one-time milestone tracking for the
+  // "Storch & Baby" diaper-bomb bonus weapon — its own late-campaign
+  // milestone list, independent of the bonus-bomb one above. Also reset on
+  // a full Game Over.
+  storkBonusMilestonesClaimed: number[];
   settings: {
     soundOn: boolean;
     musicOn: boolean;
@@ -39,6 +44,7 @@ export function defaultSaveData(): SaveData {
     equippedSuperpowerSlots: [null, null, null],
     longestChaosRun: 0,
     bonusWeaponMilestonesClaimed: [],
+    storkBonusMilestonesClaimed: [],
     settings: {
       soundOn: true,
       musicOn: true,

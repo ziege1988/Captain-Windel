@@ -107,6 +107,9 @@ export function GameScreen() {
             weaponName={WEAPONS[hud.weaponId].name}
             hasBanana={engine.player.equippedUpgradeIds.includes('banana_peel')}
             hasBonusWeapon={hud.hasBonusWeapon}
+            airSupportUnlocked={hud.airSupportUnlocked}
+            airSupportCooldownMs={hud.airSupportCooldownMs}
+            hasStorkBonusWeapon={hud.hasStorkBonusWeapon}
           />
         </>
       )}

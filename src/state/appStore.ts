@@ -38,6 +38,7 @@ interface AppState {
   updateSettings: (partial: Partial<SaveData['settings']>) => void;
   markTutorialSeen: () => void;
   claimBonusWeaponMilestone: (level: number) => void;
+  claimStorkBonusMilestone: (level: number) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -78,6 +79,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     save.totalKills = 0;
     save.bossesDefeated = [];
     save.bonusWeaponMilestonesClaimed = [];
+    save.storkBonusMilestonesClaimed = [];
     saveSaveData(save);
     set({ save, lastRunSummary: summary, screen: 'gameOver' });
   },
@@ -143,6 +145,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     const save = { ...get().save };
     if (save.bonusWeaponMilestonesClaimed.includes(level)) return;
     save.bonusWeaponMilestonesClaimed = [...save.bonusWeaponMilestonesClaimed, level];
+    saveSaveData(save);
+    set({ save });
+  },
+
+  // Humorous effects pass: same one-time-grant pattern as
+  // claimBonusWeaponMilestone above, for the separate "Storch & Baby"
+  // diaper-bomb bonus weapon's own late-campaign milestone list.
+  claimStorkBonusMilestone: (level) => {
+    const save = { ...get().save };
+    if (save.storkBonusMilestonesClaimed.includes(level)) return;
+    save.storkBonusMilestonesClaimed = [...save.storkBonusMilestonesClaimed, level];
     saveSaveData(save);
     set({ save });
   },

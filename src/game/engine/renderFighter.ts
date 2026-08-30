@@ -113,6 +113,50 @@ function computePose(f: Fighter): Pose {
       const s = Math.sin(t * 10);
       return { ...STAND, bodyLean: 0.15 * s, hipY: 2, armFrontX: 10 * s, armBackX: -10 * s };
     }
+    case 'dazed': {
+      // Humorous effects pass: a real banana-slip stagger, not a pose-swap —
+      // legs shoot out from under the body, arms flail for balance, then it
+      // settles into a woozy sway with circling birds (drawn separately)
+      // above the head. slipEnd/settleStart tuned against the ~1.1s daze
+      // window set in GameEngine's banana trigger.
+      const slipEnd = 0.22;
+      const settleStart = 0.45;
+      if (t < slipEnd) {
+        const p = t / slipEnd;
+        return {
+          ...STAND, bodyLean: -0.5 * p, hipY: 10 * p,
+          legFrontX: 26 * p, legFrontY: 14 + 10 * p,
+          legBackX: -20 * p, legBackY: 30 - 8 * p,
+          armFrontX: -22 * p, armFrontY: -6 * p,
+          armBackX: 24 * p, armBackY: -4 * p,
+        };
+      }
+      const p = Math.min(1, (t - slipEnd) / (settleStart - slipEnd));
+      const sway = Math.sin(t * 5) * 5 * (1 - p * 0.5);
+      return blend(
+        {
+          ...STAND, bodyLean: -0.5, hipY: 10,
+          legFrontX: 26, legFrontY: 24, legBackX: -20, legBackY: 22,
+          armFrontX: -22, armFrontY: -6, armBackX: 24, armBackY: -4,
+        },
+        { ...STAND, bodyLean: 0.06 * sway, hipY: 6, headOffsetX: sway * 0.6 },
+        p,
+      );
+    }
+    case 'surprised': {
+      // Humorous effects pass: a quick cartoon "whoa!" startle — arms fly
+      // up and out, head snaps back — used for the air-support stork
+      // distraction and the diaper-bomb impact. Settles into a brief
+      // wobbly hold rather than an instant snap, so it reads as a real
+      // reaction rather than a pose-swap.
+      const p = Math.min(1, t / 0.22);
+      const wobble = Math.sin(t * 7) * (1 - p) * 3;
+      return {
+        ...STAND, bodyLean: -0.22 * p, headOffsetY: -5 * p + wobble,
+        armFrontX: -20 * p, armFrontY: -14 * p,
+        armBackX: 20 * p, armBackY: -12 * p,
+      };
+    }
     case 'fallen':
       return { ...STAND, flatten: 1, bodyLean: 0, armFrontX: 20, armFrontY: 4, armBackX: -14, armBackY: -4 };
     case 'gettingUp':
@@ -742,10 +786,37 @@ function drawFeetAccessories(ctx: CanvasRenderingContext2D, f: Fighter, pose: Po
 // ice/gas/electro/chili visibly reads as frozen/slowed/stunned/burning for
 // as long as the (already-tuned) effect actually lasts — no new numbers,
 // purely a readability pass on effects that already work.
+// Humorous effects pass: classic cartoon "seeing birds" gag — 3 small
+// bird silhouettes (simple flapping "M" wings) circling above the head on
+// a tilted orbit while dazed. Shared shape used by renderFighter and (a
+// duplicate, matching the file's own no-shared-code convention) renderBoss.
+function drawCirclingBirds(ctx: CanvasRenderingContext2D, f: Fighter, shoulderY: number): void {
+  const t = f.animTimeMs / 1000;
+  const orbitY = shoulderY - 26;
+  ctx.save();
+  ctx.strokeStyle = '#3e2723';
+  ctx.lineWidth = 1.6;
+  ctx.lineCap = 'round';
+  for (let i = 0; i < 3; i++) {
+    const a = t * 4.2 + (i / 3) * Math.PI * 2;
+    const bx = Math.cos(a) * 13;
+    const by = orbitY + Math.sin(a) * 4.5;
+    const flap = Math.sin(t * 18 + i * 2) * 3.5;
+    ctx.beginPath();
+    ctx.moveTo(bx - 5, by - flap);
+    ctx.quadraticCurveTo(bx - 2, by - 1.5, bx, by);
+    ctx.quadraticCurveTo(bx + 2, by - 1.5, bx + 5, by - flap);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawStatusOverlay(ctx: CanvasRenderingContext2D, f: Fighter, shoulderY: number, hipY: number): void {
   const s = f.status;
   const t = f.animTimeMs / 1000;
-  if (s.frozenUntilMs > 0) {
+  if (f.dazedUntilMs > 0) {
+    drawCirclingBirds(ctx, f, shoulderY);
+  } else if (s.frozenUntilMs > 0) {
     ctx.save();
     ctx.globalAlpha = 0.4;
     ctx.fillStyle = '#b3e5fc';

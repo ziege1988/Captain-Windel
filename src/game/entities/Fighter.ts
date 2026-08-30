@@ -61,6 +61,13 @@ export class Fighter {
   // campaign milestones — player-only, consumed on use (see
   // GameEngine.throwBonusWeapon).
   hasBonusWeapon = false;
+  // Humorous effects pass: real banana-slip stun (legs-out-from-under +
+  // circling cartoon birds above the head) instead of a generic stagger.
+  // Blocks canAct() via hitstunRemainingMs, but is tracked separately so the
+  // renderers know to draw the slip pose + birds rather than a plain stagger.
+  dazedUntilMs = 0;
+  // One-time bonus weapon: stork drops a diaper bomb on a chosen target.
+  hasStorkBonusWeapon = false;
 
   // Enemy/boss-only metadata (unused for the player).
   aiType: string | null = null;
@@ -137,6 +144,7 @@ export class Fighter {
     if (this.weaponFlashMs > 0) this.weaponFlashMs -= dtMs;
     if (this.vomitTimerMs > 0) this.vomitTimerMs -= dtMs;
     if (this.bananaCooldownMs > 0) this.bananaCooldownMs -= dtMs;
+    if (this.dazedUntilMs > 0) this.dazedUntilMs -= dtMs;
 
     if (this.status.slowUntilMs > 0) {
       this.status.slowUntilMs -= dtMs;

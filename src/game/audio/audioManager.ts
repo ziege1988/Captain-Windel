@@ -5,7 +5,8 @@
 export type SoundId =
   | 'hit' | 'heavyHit' | 'criticalHit' | 'jump' | 'land' | 'weaponSwing'
   | 'enemyHit' | 'vomit' | 'explosion' | 'superpower'
-  | 'victory' | 'gameOver' | 'bossIntro' | 'block' | 'dodge' | 'upgrade' | 'menuTap';
+  | 'victory' | 'gameOver' | 'bossIntro' | 'block' | 'dodge' | 'upgrade' | 'menuTap'
+  | 'storkFlyby' | 'surprise' | 'diaperSplat';
 
 interface SoundSpec {
   wave: OscillatorType | 'noise';
@@ -42,6 +43,12 @@ const SOUND_SPECS: Record<SoundId, SoundSpec> = {
   dodge: { wave: 'sine', freqStart: 520, freqEnd: 680, durationMs: 85, volume: 0.2, attackMs: 5 },
   upgrade: { wave: 'sine', freqStart: 410, freqEnd: 920, durationMs: 260, volume: 0.36, attackMs: 12 },
   menuTap: { wave: 'sine', freqStart: 600, freqEnd: 700, durationMs: 50, volume: 0.2, attackMs: 3 },
+  // Humorous effects pass: a wobbly rising-falling "honk" for the stork's
+  // flyby, a bright short "surprise" sting for a distracted reaction, and a
+  // soft squelchy "splat" for the diaper-bomb impact.
+  storkFlyby: { wave: 'triangle', freqStart: 260, freqEnd: 420, durationMs: 260, volume: 0.3, attackMs: 10 },
+  surprise: { wave: 'square', freqStart: 900, freqEnd: 1400, durationMs: 140, volume: 0.34, attackMs: 3 },
+  diaperSplat: { wave: 'noise', freqStart: 300, freqEnd: 60, durationMs: 220, volume: 0.4, attackMs: 4, punch: true },
 };
 
 // Section 4/5/7 (polish pass): several distinct fart "personalities" —

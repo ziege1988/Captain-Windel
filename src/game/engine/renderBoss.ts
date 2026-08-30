@@ -111,6 +111,47 @@ function computeBossPose(f: Fighter): BossPose {
       const s = Math.sin(t * 8);
       return { ...STAND, bodyLean: 0.14 * s, hipY: 3, armFrontX: 9 * s, armBackX: -9 * s };
     }
+    case 'dazed': {
+      // Humorous effects pass: a real banana-slip for bosses too — heavier
+      // and shorter than the player-scale slip (a boss's bulk shouldn't
+      // topple as dramatically), but still a clear stumble before it
+      // settles into a woozy sway with circling birds (drawn separately).
+      const slipEnd = 0.22;
+      const settleStart = 0.42;
+      if (t < slipEnd) {
+        const p = t / slipEnd;
+        return {
+          ...STAND, bodyLean: -0.35 * p, hipY: 8 * p,
+          legFrontX: 20 * p, legFrontY: 20 + 8 * p,
+          legBackX: -16 * p, legBackY: 32 - 6 * p,
+          armFrontX: -18 * p, armFrontY: -4 * p,
+          armBackX: 20 * p, armBackY: -2 * p,
+        };
+      }
+      const p = Math.min(1, (t - slipEnd) / (settleStart - slipEnd));
+      const sway = Math.sin(t * 4.5) * 4 * (1 - p * 0.5);
+      return blend(
+        {
+          ...STAND, bodyLean: -0.35, hipY: 8,
+          legFrontX: 20, legFrontY: 28, legBackX: -16, legBackY: 26,
+          armFrontX: -18, armFrontY: -4, armBackX: 20, armBackY: -2,
+        },
+        { ...STAND, bodyLean: 0.05 * sway, hipY: 4, headOffsetX: sway * 0.5 },
+        p,
+      );
+    }
+    case 'surprised': {
+      // Humorous effects pass: the boss looks up/flinches at the stork or
+      // diaper-bomb impact — arms fly up, head snaps back — same shape as
+      // the player-scale startle, just proportioned for a bigger body.
+      const p = Math.min(1, t / 0.25);
+      const wobble = Math.sin(t * 6) * (1 - p) * 3;
+      return {
+        ...STAND, bodyLean: -0.18 * p, headOffsetY: -6 * p + wobble,
+        armFrontX: -22 * p, armFrontY: -12 * p,
+        armBackX: 22 * p, armBackY: -10 * p,
+      };
+    }
     case 'fallen':
       return { ...STAND, flatten: 1, bodyLean: 0, armFrontX: 22, armFrontY: 6, armBackX: -16, armBackY: -4 };
     case 'gettingUp':
@@ -713,10 +754,36 @@ const DEFAULT_COSTUME: BossCostume = {
   },
 };
 
+// Humorous effects pass: same cartoon "seeing birds" gag as renderFighter's
+// drawCirclingBirds, duplicated here per this file's own no-shared-code
+// convention. Orbit sized up a little for a boss's bigger head.
+function drawCirclingBirds(ctx: CanvasRenderingContext2D, f: Fighter, shoulderY: number): void {
+  const t = f.animTimeMs / 1000;
+  const orbitY = shoulderY - 34;
+  ctx.save();
+  ctx.strokeStyle = '#3e2723';
+  ctx.lineWidth = 1.8;
+  ctx.lineCap = 'round';
+  for (let i = 0; i < 3; i++) {
+    const a = t * 4 + (i / 3) * Math.PI * 2;
+    const bx = Math.cos(a) * 17;
+    const by = orbitY + Math.sin(a) * 5.5;
+    const flap = Math.sin(t * 17 + i * 2) * 4;
+    ctx.beginPath();
+    ctx.moveTo(bx - 6, by - flap);
+    ctx.quadraticCurveTo(bx - 2.4, by - 2, bx, by);
+    ctx.quadraticCurveTo(bx + 2.4, by - 2, bx + 6, by - flap);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawBossStatusOverlay(ctx: CanvasRenderingContext2D, f: Fighter, shoulderY: number, hipY: number): void {
   const s = f.status;
   const t = f.animTimeMs / 1000;
-  if (s.frozenUntilMs > 0) {
+  if (f.dazedUntilMs > 0) {
+    drawCirclingBirds(ctx, f, shoulderY);
+  } else if (s.frozenUntilMs > 0) {
     ctx.save();
     ctx.globalAlpha = 0.35;
     ctx.fillStyle = '#b3e5fc';
