@@ -187,6 +187,19 @@ interface BeeSwarmEffect {
   hitsFired: number;
 }
 
+// Whirlwind-Furz follow-up: a real world-space sweep from where it was
+// summoned (startX) across to the far arena wall (endX) — the whole field,
+// not just the gap to the enemy — growing and spinning faster as it goes.
+interface TornadoEffect {
+  x: number;
+  startX: number;
+  endX: number;
+  ageMs: number;
+  totalMs: number;
+  rotation: number;
+  hasHitEnemy: boolean;
+}
+
 // Section 8 (quality update): campaign levels that grant the player a
 // one-time throwable bonus weapon — a handful of deliberate milestones,
 // not every level, and never boss levels (so the reward doesn't compete
@@ -272,6 +285,13 @@ export class GameEngine {
   // vertical arc, so it reads as "the tornado caught them" rather than a
   // teleport up and back down. null whenever nothing is currently caught.
   private tornadoCarry: { target: Fighter; ageMs: number; totalMs: number; centerX: number } | null = null;
+  // Whirlwind-Furz follow-up: the funnel now genuinely sweeps across the
+  // WHOLE arena (not just to wherever the enemy happened to be standing),
+  // growing larger and spinning faster the whole way, drawn fresh every
+  // frame (updateTornadoEffect/renderTornadoEffect) instead of a handful of
+  // scheduled particle bursts — a real world-space effect, like the beam/
+  // raven/stork effects below, rather than something attached to a fighter.
+  private tornadoEffect: TornadoEffect | null = null;
 
   score = 0;
   combo = 0;
@@ -1478,6 +1498,7 @@ export class GameEngine {
 
     this.updateProjectiles(dtSec);
     this.updateHazards(dtSec);
+    this.updateTornadoEffect(dtMs);
     this.updateStork(dtMs);
     if (this.airSupportCooldownMs > 0) this.airSupportCooldownMs -= dtMs;
 
@@ -1858,6 +1879,89 @@ export class GameEngine {
         this.shake.add(0.3);
       }
     }
+  }
+
+  // How big the sweeping funnel is at a given point (0..1) through its
+  // travel — starts as a small dust-devil and ends up towering over a
+  // fighter by the time it reaches the far wall.
+  private tornadoRadius(t: number): number {
+    return 20 + t * 82;
+  }
+
+  // Point 12/17 (follow-up): advances the funnel one real frame at a
+  // time — position sweeps linearly from where it was summoned to the far
+  // arena wall, rotation keeps accumulating (and accelerates as it grows),
+  // and it checks for the enemy continuously rather than at one scheduled
+  // instant, so however fast or slow a run happens to tick, the lift fires
+  // exactly when the funnel visually reaches them.
+  private updateTornadoEffect(dtMs: number): void {
+    const tornado = this.tornadoEffect;
+    if (!tornado) return;
+    tornado.ageMs += dtMs;
+    const t = Math.min(1, tornado.ageMs / tornado.totalMs);
+    tornado.x = tornado.startX + (tornado.endX - tornado.startX) * t;
+    const spinSpeedRadPerSec = 5 + t * 10; // intensifying rotation as it grows
+    tornado.rotation += spinSpeedRadPerSec * (dtMs / 1000);
+
+    const radius = this.tornadoRadius(t);
+    const groundY = this.layout.groundY;
+    // Ambient dust/grass/debris kicked up continuously along its path.
+    if (Math.random() < 0.65) {
+      const a = tornado.rotation * 1.7 + Math.random() * Math.PI * 2;
+      this.particles.burst({
+        x: tornado.x + Math.cos(a) * radius * 0.75,
+        y: groundY - Math.abs(Math.sin(a)) * radius * 0.85,
+      }, 1, {
+        color: Math.random() < 0.4 ? '#8d6e63' : Math.random() < 0.7 ? '#aed581' : '#cfd8dc',
+        shape: Math.random() < 0.3 ? 'spark' : 'dust',
+        size: 5 + radius * 0.12, life: 0.45, maxLife: 0.45, gravity: -25,
+      });
+    }
+
+    if (!tornado.hasHitEnemy && this.enemy && !this.enemy.isDead) {
+      if (Math.abs(this.enemy.body.pos.x - tornado.x) < radius * 0.6) {
+        tornado.hasHitEnemy = true;
+        this.beginTornadoLift();
+      }
+    }
+
+    if (t >= 1) this.tornadoEffect = null;
+  }
+
+  // Point 13: a real tapering, twisting column — stacked bands whose
+  // horizontal offset winds around as `rotation` increases, instead of a
+  // flat grey circle/cloud — drawn fresh every frame in world space (see
+  // render()) so growth and rotation are always exactly in sync with the
+  // funnel's actual current position.
+  private renderTornadoEffect(ctx: CanvasRenderingContext2D): void {
+    const tornado = this.tornadoEffect;
+    if (!tornado) return;
+    const t = Math.min(1, tornado.ageMs / tornado.totalMs);
+    const radius = this.tornadoRadius(t);
+    const groundY = this.layout.groundY;
+    const height = radius * 2.6;
+    const bandCount = 10;
+
+    ctx.save();
+    ctx.globalAlpha = 0.4 + Math.min(0.4, t * 0.5);
+    ctx.fillStyle = 'rgba(90,74,58,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(tornado.x, groundY + 2, radius * 1.15, radius * 0.3, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    for (let i = 0; i < bandCount; i++) {
+      const bf = i / (bandCount - 1); // 0 at the ground, 1 at the top
+      const bandY = groundY - bf * height;
+      const bandRadius = radius * (0.4 + bf * 0.7);
+      const twist = Math.cos(tornado.rotation * (1.3 + bf * 0.7) + bf * 3.1);
+      const bandX = tornado.x + twist * bandRadius * 0.4;
+      ctx.globalAlpha = (0.5 + Math.min(0.4, t * 0.4)) * (1 - bf * 0.25);
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(141,110,99,0.6)' : 'rgba(207,216,220,0.6)';
+      ctx.beginPath();
+      ctx.ellipse(bandX, bandY, bandRadius, bandRadius * 0.42, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
   private handleEnemyDefeated(enemy: Fighter): void {
@@ -2493,47 +2597,24 @@ export class GameEngine {
         });
         break;
       case 'tornado': {
-        // Whirlwind-Furz full rework (points 12-15): a genuinely visible,
-        // growing, rotating funnel that travels from the character to the
-        // enemy over several beats — dense spiralling dust/debris at
-        // multiple heights and an increasing radius/rotation speed as it
-        // advances, so it reads as an actual small tornado rather than a
-        // sparse puff of dots. The physical lift only fires once it
-        // actually arrives (beginTornadoLift), not immediately.
-        const startX = originX;
-        const startY = this.layout.groundY - 4;
-        const endX = this.enemy ? this.enemy.body.pos.x : originX + Math.cos(dirAngle) * 220;
-        const stepCount = 13;
-        const totalMs = 900;
-        const debrisColors = ['#8d6e63', '#cfd8dc', '#aed581', '#a1887f'];
-        for (let step = 0; step <= stepCount; step++) {
-          window.setTimeout(() => {
-            const t = step / stepCount;
-            const cx = startX + (endX - startX) * t;
-            const radius = 16 + t * 42; // visibly grows larger as it approaches
-            const spins = 4;
-            // Several stacked rings at different heights so the funnel
-            // reads as a real column with volume, not a flat ring of dots.
-            const bands = 4;
-            for (let band = 0; band < bands; band++) {
-              const bandFrac = band / (bands - 1);
-              const bandRadius = radius * (0.45 + bandFrac * 0.55);
-              const bandY = startY - bandFrac * (34 + t * 26);
-              const ringParticles = 6 + Math.round(bandFrac * 4);
-              for (let r = 0; r < ringParticles; r++) {
-                const a = (r / ringParticles) * Math.PI * 2 + t * spins * Math.PI * 2 + band * 0.6;
-                const px = cx + Math.cos(a) * bandRadius;
-                const py = bandY - Math.abs(Math.sin(a)) * bandRadius * 0.35;
-                this.particles.burst({ x: px, y: py }, 1, {
-                  color: debrisColors[(r + band) % debrisColors.length],
-                  shape: (r + band) % 4 === 0 ? 'spark' : 'dust',
-                  size: 7 + radius * 0.24, life: 0.5, maxLife: 0.5, gravity: -25,
-                });
-              }
-            }
-            if (step === stepCount) this.beginTornadoLift();
-          }, (step / stepCount) * totalMs);
-        }
+        // Whirlwind-Furz follow-up: "über das ganze Spielfeld fegen und
+        // dabei größer werden und sich animiert drehen" — a real world-space
+        // funnel (see TornadoEffect/updateTornadoEffect/renderTornadoEffect)
+        // that sweeps from where it's summoned all the way to the far arena
+        // wall, growing larger and spinning faster the entire way, redrawn
+        // fresh every frame — not a handful of scheduled particle puffs.
+        // The physical lift fires once it actually reaches the enemy
+        // (checked continuously in updateTornadoEffect), not immediately.
+        const dir: 1 | -1 = Math.cos(dirAngle) >= 0 ? 1 : -1;
+        this.tornadoEffect = {
+          x: originX,
+          startX: originX,
+          endX: dir > 0 ? this.layout.maxX : this.layout.minX,
+          ageMs: 0,
+          totalMs: 2400,
+          rotation: 0,
+          hasHitEnemy: false,
+        };
         break;
       }
       case 'nuclear':
@@ -2614,6 +2695,7 @@ export class GameEngine {
     this.renderBeeSwarmEffect(ctx);
     this.renderRaven(ctx);
     this.renderBeamEffect(ctx);
+    this.renderTornadoEffect(ctx);
     this.particles.render(ctx);
     this.renderComicTexts(ctx);
     ctx.restore();
