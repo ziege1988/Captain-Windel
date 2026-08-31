@@ -28,7 +28,11 @@ export const SUPERPOWERS: Record<SuperpowerId, SuperpowerDef> = {
     icon: '🌪️',
     description: 'Ein kleiner Tornado packt den Gegner, wirbelt ihn durch die Luft und wirft ihn zu Boden.',
     unlockAfterBossIndex: 0,
-    cooldownMs: 22000,
+    // Follow-up balance pass: noticeably more impactful than the other
+    // Fürze (full-field sweep + real lift/spin/fall), so it earns a longer
+    // charge time to match — clearly above electro/ice/chili/gasCloud, just
+    // short of nuclear's even longer, even-higher-damage cooldown.
+    cooldownMs: 30000,
     damage: 30,
     effectDurationMs: 1400,
     color: '#90a4ae',

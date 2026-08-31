@@ -446,7 +446,14 @@ export class GameEngine {
     this.bossDefId = level.bossId ?? null;
     this.projectiles = [];
     this.hazards = [];
-    this.pickups = [];
+    // Deliberately NOT resetting pickups here: on a normal (non-boss) kill
+    // with no upgrade offered, GameScreen auto-advances to the next level
+    // only ~700ms after 'levelWon' — often before a just-spawned coin
+    // reward has had time to home in and be collected. Clearing the array
+    // on load silently discarded that reward; letting it carry over means
+    // it simply keeps homing toward the player (who is at the same
+    // reference point regardless of level) and gets collected within a
+    // fraction of a second in the new level instead of vanishing.
     this.storkFlight = null;
 
     // Section 1: start with clear daylight between the two fighters rather
@@ -1928,38 +1935,81 @@ export class GameEngine {
     if (t >= 1) this.tornadoEffect = null;
   }
 
-  // Point 13: a real tapering, twisting column — stacked bands whose
-  // horizontal offset winds around as `rotation` increases, instead of a
-  // flat grey circle/cloud — drawn fresh every frame in world space (see
-  // render()) so growth and rotation are always exactly in sync with the
-  // funnel's actual current position.
+  // Follow-up ("nicht wie Kreise, sondern wie ein echter Wirbelwind"): the
+  // old version was a stack of discrete ellipses, which read as a pile of
+  // circles rather than one funnel. This draws ONE continuous, turbulent
+  // cone silhouette (narrow where it touches the ground, wide at the top —
+  // the classic 🌪️ shape) plus several spiral stripes that wind around it
+  // and keep winding as `rotation` advances, so the whirling motion is
+  // unmistakable rather than implied by offsetting flat ovals.
   private renderTornadoEffect(ctx: CanvasRenderingContext2D): void {
     const tornado = this.tornadoEffect;
     if (!tornado) return;
     const t = Math.min(1, tornado.ageMs / tornado.totalMs);
-    const radius = this.tornadoRadius(t);
+    const topRadius = this.tornadoRadius(t);
+    const bottomRadius = Math.max(6, topRadius * 0.16);
     const groundY = this.layout.groundY;
-    const height = radius * 2.6;
-    const bandCount = 10;
+    const height = topRadius * 2.5;
+    const samples = 24;
+    const edgeAt = (h: number, side: 1 | -1): number => {
+      const r = bottomRadius + (topRadius - bottomRadius) * h;
+      // A turbulent wobble on the silhouette itself — not a smooth cone —
+      // so the outline never looks like a clean, static circle stack.
+      const wobble = Math.sin(tornado.rotation * 2.6 + h * 8.5) * r * 0.14;
+      return tornado.x + side * (r + wobble);
+    };
 
     ctx.save();
-    ctx.globalAlpha = 0.4 + Math.min(0.4, t * 0.5);
-    ctx.fillStyle = 'rgba(90,74,58,0.35)';
+
+    // Dust skirt where the funnel actually touches down.
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = 'rgba(120,100,80,0.5)';
     ctx.beginPath();
-    ctx.ellipse(tornado.x, groundY + 2, radius * 1.15, radius * 0.3, 0, 0, Math.PI * 2);
+    ctx.ellipse(tornado.x, groundY + 2, bottomRadius * 2.4, bottomRadius * 0.8, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    for (let i = 0; i < bandCount; i++) {
-      const bf = i / (bandCount - 1); // 0 at the ground, 1 at the top
-      const bandY = groundY - bf * height;
-      const bandRadius = radius * (0.4 + bf * 0.7);
-      const twist = Math.cos(tornado.rotation * (1.3 + bf * 0.7) + bf * 3.1);
-      const bandX = tornado.x + twist * bandRadius * 0.4;
-      ctx.globalAlpha = (0.5 + Math.min(0.4, t * 0.4)) * (1 - bf * 0.25);
-      ctx.fillStyle = i % 2 === 0 ? 'rgba(141,110,99,0.6)' : 'rgba(207,216,220,0.6)';
+    // The funnel body: one filled path from the ground up the left edge,
+    // across the top, and back down the right edge.
+    ctx.globalAlpha = 0.5 + Math.min(0.3, t * 0.35);
+    ctx.fillStyle = 'rgba(118,108,98,0.55)';
+    ctx.beginPath();
+    ctx.moveTo(tornado.x, groundY);
+    for (let i = 0; i <= samples; i++) {
+      const h = i / samples;
+      ctx.lineTo(edgeAt(h, -1), groundY - h * height);
+    }
+    for (let i = samples; i >= 0; i--) {
+      const h = i / samples;
+      ctx.lineTo(edgeAt(h, 1), groundY - h * height);
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    // A soft, wider cloud cap at the very top — the funnel's "head."
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = 'rgba(150,145,140,0.5)';
+    ctx.beginPath();
+    ctx.ellipse(tornado.x, groundY - height, topRadius * 1.05, topRadius * 0.4, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Spiral stripes winding around the cone — the actual "whirlwind" read,
+    // continuously rotating rather than a static twist offset per band.
+    const spiralCount = 3;
+    for (let s = 0; s < spiralCount; s++) {
+      const phase = tornado.rotation * 2.4 + (s / spiralCount) * Math.PI * 2;
       ctx.beginPath();
-      ctx.ellipse(bandX, bandY, bandRadius, bandRadius * 0.42, 0, 0, Math.PI * 2);
-      ctx.fill();
+      for (let i = 0; i <= samples; i++) {
+        const h = i / samples;
+        const r = (bottomRadius + (topRadius - bottomRadius) * h) * 0.8;
+        const a = phase + h * Math.PI * 3.6; // several wraps bottom to top
+        const px = tornado.x + Math.cos(a) * r;
+        const py = groundY - h * height;
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.globalAlpha = 0.8;
+      ctx.strokeStyle = s % 2 === 0 ? 'rgba(220,225,228,0.8)' : 'rgba(120,95,80,0.7)';
+      ctx.lineWidth = 2.4;
+      ctx.stroke();
     }
     ctx.restore();
   }
@@ -1974,6 +2024,14 @@ export class GameEngine {
       if (this.bossDefId) this.spawnBossRewards(enemy, BOSSES[this.bossDefId]);
     } else {
       this.addScore(enemy.scoreValue);
+      // Balance pass: every normal kill now earns a small coin reward too
+      // (previously only bosses dropped coins) — scaled down from the
+      // enemy's own scoreValue so weaker enemies give a couple of coins and
+      // tougher normal enemies a bit more, but deliberately small next to
+      // shop prices (cheapest special weapon is 30 coins) so a couple of
+      // early kills can never already afford one; coins stay a steady,
+      // gradual reward, with bosses remaining the big lump-sum payout.
+      this.spawnEnemyCoinDrop(enemy, Math.max(1, Math.round(enemy.scoreValue / 40)));
     }
     this.phase = 'levelWon';
     // Visible on levels that skip the upgrade screen (see GameScreen) —
@@ -2004,6 +2062,26 @@ export class GameEngine {
   // ---------------------------------------------------------------------
   // Persistent-progression pass: coin/heart pickups
   // ---------------------------------------------------------------------
+
+  /** A single small coin pickup for a normal-enemy kill — same physics/
+   * homing/collection path as a boss's coin pile (updatePickups below),
+   * just one modest coin instead of a multi-coin scatter, so a routine
+   * kill still feels rewarded without approaching boss-payout territory. */
+  private spawnEnemyCoinDrop(enemy: Fighter, value: number): void {
+    pickupCounter += 1;
+    this.pickups.push({
+      id: pickupCounter,
+      kind: 'coin',
+      pos: { x: enemy.body.pos.x, y: this.layout.groundY - 80 },
+      vel: { x: (Math.random() - 0.5) * 60, y: -190 - Math.random() * 40 },
+      ageMs: 0,
+      value,
+      homing: false,
+    });
+    this.particles.burst({ x: enemy.body.pos.x, y: this.layout.groundY - 70 }, 6, {
+      color: '#ffd54f', shape: 'spark', size: 5, life: 0.35, maxLife: 0.35,
+    });
+  }
 
   /** Spawns a boss's rewards (section 1/13/16 of the brief): several
    * individual coins that pop up and briefly scatter before settling, worth
