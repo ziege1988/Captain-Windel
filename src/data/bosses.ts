@@ -14,6 +14,9 @@ export const BOSSES: Record<string, BossDef> = {
     abilities: [
       { id: 'balloonBarrage', name: 'Ballon-Salve', cooldownMs: 9000, telegraphMs: 700 },
       { id: 'chargeSlam', name: 'Hammer-Sprung', cooldownMs: 7000, telegraphMs: 500 },
+      // Point: a clown needs a proper ranged weapon of his own — a real
+      // volley the player has to dodge or block, not just melee.
+      { id: 'confettiCannon', name: 'Konfetti-Kanone', cooldownMs: 8000, telegraphMs: 600 },
     ],
     introText: 'Der Clown betritt die Arena... irgendwas stimmt nicht mit ihm.',
     deathText: 'Der Clown fällt der Länge nach hin und lässt einen letzten Luftballon steigen.',

@@ -197,7 +197,7 @@ export interface EnemyDef {
 // Bosses
 // ---------------------------------------------------------------------------
 
-export type BossAbilityId = 'balloonBarrage' | 'eggDrop' | 'chargeSlam' | 'summonMinion' | 'fireWave' | 'frostNova';
+export type BossAbilityId = 'balloonBarrage' | 'eggDrop' | 'chargeSlam' | 'summonMinion' | 'fireWave' | 'frostNova' | 'confettiCannon';
 
 export interface BossAbilityDef {
   id: BossAbilityId;

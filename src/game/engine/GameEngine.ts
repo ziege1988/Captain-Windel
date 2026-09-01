@@ -68,7 +68,7 @@ interface Projectile {
 interface Hazard {
   id: number;
   kind: 'egg' | 'balloon' | 'banana' | 'bonusBomb' | 'fireWave' | 'frostNova' | 'diaperBomb'
-    | 'poopBomb' | 'explodingDuck' | 'bigBoomerangOut' | 'bigBoomerangBack' | 'tornado' | 'eggBomberEgg';
+    | 'poopBomb' | 'explodingDuck' | 'bigBoomerangOut' | 'bigBoomerangBack' | 'tornado' | 'eggBomberEgg' | 'confetti';
   pos: { x: number; y: number };
   vel: { x: number; y: number };
   timer: number;
@@ -1354,7 +1354,14 @@ export class GameEngine {
 
   useSuperpower(id: SuperpowerId): void {
     if (this.phase !== 'playing') return;
-    if (!this.save.unlockedSuperpowers.includes(id)) return;
+    // Bug fix: read fresh from the store rather than via this.save, which is
+    // only a snapshot captured once at construction (see the identical
+    // special-weapon-unlock fix above) — a superpower unlocked mid-run by
+    // beating a boss (appStore.recordKill) was never reflected on that
+    // stale reference, so the button would appear equipped and tappable in
+    // the UI (which reads the live store) while this check silently
+    // rejected it before the animation even started.
+    if (!useAppStore.getState().save.unlockedSuperpowers.includes(id)) return;
     if ((this.superpowerCooldowns.get(id) ?? 0) > 0) return;
     const def = SUPERPOWERS[id];
     this.superpowerCooldowns.set(id, def.cooldownMs);
@@ -1838,6 +1845,12 @@ export class GameEngine {
       }
       enemy.facing = this.player.body.pos.x >= enemy.body.pos.x ? 1 : -1;
     }
+    // Bug fix: isBlocking previously only drove the visual pose — it was
+    // never actually consumed anywhere to reduce damage (see applyHit),
+    // making the block button (and a "Blocker" enemy's block AI) purely
+    // cosmetic. Kept per-frame like the player's own isBlocking below, so
+    // an enemy is only genuinely blocking exactly while playing the pose.
+    enemy.isBlocking = decision.wantsBlock;
     if (decision.wantsBlock) enemy.setAnim('block');
     if (decision.wantsAttack) this.startAttack(enemy, decision.wantsKick);
     void dtSec;
@@ -1918,6 +1931,29 @@ export class GameEngine {
         this.particles.burst({ x: boss.body.pos.x, y: this.layout.groundY - 40 }, 16, { color: '#81d4fa', shape: 'circle', size: 5, gravity: 0 });
         break;
       }
+      case 'confettiCannon': {
+        // The Clown's own proper ranged weapon — a real volley the player
+        // has to dodge or block, not just melee. A wide fan of small,
+        // colorful confetti shot that arcs down under gravity (rather than
+        // a flat, unavoidable line), so there's a genuine dodge window.
+        const confettiColors = ['#e91e63', '#ffc107', '#42a5f5', '#66bb6a', '#ab47bc'];
+        for (let i = 0; i < 6; i++) {
+          hazardCounter += 1;
+          const spread = (i - 2.5) * 0.1;
+          const speed = 380 + Math.random() * 90;
+          this.hazards.push({
+            id: hazardCounter, kind: 'confetti',
+            pos: { x: boss.body.pos.x + dir * 30, y: this.layout.groundY - 90 },
+            vel: { x: dir * speed * Math.cos(spread), y: speed * Math.sin(spread) - 60 },
+            timer: 1400, radius: 16, owner: 'enemy', triggered: false,
+          });
+        }
+        audio.play('weaponSwing');
+        this.particles.burstDirectional({ x: boss.body.pos.x + dir * 30, y: this.layout.groundY - 90 }, 14, dir > 0 ? 0 : Math.PI, 0.5, {
+          color: confettiColors[Math.floor(Math.random() * confettiColors.length)], shape: 'spark', size: 6, life: 0.4, maxLife: 0.4,
+        });
+        break;
+      }
     }
     // Section (boss AI overhaul): a firm recovery beat after any special so
     // it can't chain straight into a normal punch — the special itself is
@@ -1953,6 +1989,34 @@ export class GameEngine {
         audio.play('dodge');
       }
       return;
+    }
+
+    // Bug fix: isBlocking previously only drove the visual pose — it was
+    // never actually consumed to reduce damage, so the BLOCK button (and a
+    // "Blocker" enemy's own block AI) did nothing mechanically and the
+    // defender took full damage regardless. A real, facing-gated block now
+    // absorbs most of the damage and cancels stagger/knockback, matching
+    // what the pose and its dedicated 'block' sound always implied it did.
+    // This applies to both melee and ranged/projectile hits (both funnel
+    // through here), so it also gives the player a genuine, always-
+    // available counter to ranged enemies from the very first level —
+    // no separate shield item needed.
+    if (defender.isBlocking) {
+      const dx = attacker.body.pos.x - defender.body.pos.x;
+      const facingAttacker = Math.sign(dx) === defender.facing || Math.abs(dx) < 12;
+      if (facingAttacker) {
+        const blockedHit = resolveHit(attacker, weapon, isKick, perfect);
+        const blockedDmg = Math.max(1, Math.round(applyDefense(blockedHit.damage, defender.stats.defense) * 0.2));
+        this.dealDamageTo(defender, blockedDmg, true, isKick);
+        const dir = Math.sign(defender.body.pos.x - attacker.body.pos.x) || attacker.facing;
+        applyKnockback(defender.body, dir, blockedHit.knockback * 0.2, 0);
+        audio.play('block');
+        this.particles.burst({ x: defender.body.pos.x, y: this.layout.groundY - 70 * defender.scale }, 5, {
+          color: '#cfd8dc', shape: 'spark', size: 5, life: 0.22, maxLife: 0.22,
+        });
+        this.shake.add(0.08);
+        return;
+      }
     }
 
     const hit = resolveHit(attacker, weapon, isKick, perfect);
@@ -2532,6 +2596,9 @@ export class GameEngine {
       if (h.kind === 'bonusBomb' || h.kind === 'diaperBomb' || h.kind === 'poopBomb' || h.kind === 'eggBomberEgg') {
         h.vel.y += BALANCE.physics.gravity * 0.7 * dtSec;
       }
+      if (h.kind === 'confetti') {
+        h.vel.y += BALANCE.physics.gravity * 0.35 * dtSec;
+      }
       // Persistent-progression pass: the "Riesen-Bumerang" special weapon's
       // return leg homes on the player's current position every tick
       // (mirroring updateProjectiles' own boomerang-return math) rather than
@@ -2621,6 +2688,19 @@ export class GameEngine {
       if (directTarget) {
         this.dealDamageTo(directTarget, applyDefense(8, directTarget.stats.defense), false);
         directTarget.applySlow(0.75, 900);
+      }
+    } else if (h.kind === 'confetti') {
+      // Deliberately light — a joke weapon that still forces a real dodge/
+      // block decision, not a serious damage source on its own.
+      this.particles.burst(h.pos, 10, {
+        color: ['#e91e63', '#ffc107', '#42a5f5', '#66bb6a'][Math.floor(Math.random() * 4)], shape: 'spark', size: 5, life: 0.35, maxLife: 0.35, gravity: 80,
+      });
+      audio.play('hit');
+      if (directTarget) {
+        this.dealDamageTo(directTarget, applyDefense(6, directTarget.stats.defense), false);
+        directTarget.setAnim('surprised', true);
+        directTarget.hitstunRemainingMs = Math.max(directTarget.hitstunRemainingMs, 260);
+        this.spawnComicText('🎉', h.pos.x, h.pos.y - 10, '#ffd54f');
       }
     } else if (h.kind === 'banana') {
       if (directTarget && directTarget.kind !== 'player') {
@@ -3325,6 +3405,13 @@ export class GameEngine {
       ctx.beginPath();
       ctx.ellipse(0, 0, 16, 6, 0.3, 0, Math.PI * 2);
       ctx.fill();
+    } else if (h.kind === 'confetti') {
+      // A small tumbling colored square — reads as a party-cannon shot,
+      // not a hard projectile.
+      const spin = (h.pos.x + h.pos.y) * 0.15;
+      ctx.rotate(spin);
+      ctx.fillStyle = ['#e91e63', '#ffc107', '#42a5f5', '#66bb6a', '#ab47bc'][h.id % 5];
+      ctx.fillRect(-4, -4, 8, 8);
     } else if (h.kind === 'bonusBomb') {
       // A round cartoon bomb, tumbling in flight, with a lit sparking fuse
       // — instantly readable as "explosive," matching the reward's own
