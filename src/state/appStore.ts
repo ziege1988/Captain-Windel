@@ -37,7 +37,10 @@ interface AppState {
   continueRun: () => void;
   finishRun: (summary: RunSummary) => void;
   unlockWeapon: (id: WeaponId) => void;
-  recordKill: (bossId?: string) => void;
+  // Point 59: returns which superpower ids (if any) this kill newly
+  // unlocked, so the caller (GameScreen) can show a real milestone
+  // showcase instead of a generic victory toast.
+  recordKill: (bossId?: string) => SuperpowerId[];
   setSuperpowerSlot: (slot: number, id: SuperpowerId | null) => void;
   updateSettings: (partial: Partial<SaveData['settings']>) => void;
   markTutorialSeen: () => void;
@@ -117,6 +120,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   recordKill: (bossId) => {
     const save = { ...get().save };
     save.totalKills += 1;
+    let newlyUnlocked: SuperpowerId[] = [];
     if (bossId && !save.bossesDefeated.includes(bossId)) {
       save.bossesDefeated = [...save.bossesDefeated, bossId];
       // Reward-pacing pass (points 31/32): a new superpower is only ever
@@ -124,7 +128,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // kill-count gate — it's now permanent (see finishRun, which no
       // longer clears bossesDefeated/unlockedSuperpowers on Game Over).
       const unlocked = getUnlockedSuperpowers(save.bossesDefeated);
-      const newlyUnlocked = unlocked.filter((id) => !save.unlockedSuperpowers.includes(id));
+      newlyUnlocked = unlocked.filter((id) => !save.unlockedSuperpowers.includes(id));
       if (newlyUnlocked.length > 0) {
         save.unlockedSuperpowers = unlocked;
         const slots = [...save.equippedSuperpowerSlots];
@@ -137,6 +141,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     saveSaveData(save);
     set({ save });
+    return newlyUnlocked;
   },
 
   setSuperpowerSlot: (slot, id) => {

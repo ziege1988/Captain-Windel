@@ -16,7 +16,7 @@ import { tickBossAbilities } from '../ai/bossBehavior';
 import { applyKnockback, distance, stepPhysics } from '../physics/physics';
 import { ParticleSystem } from '../effects/particles';
 import { HitStop, ScreenShake } from '../effects/screenEffects';
-import { audio } from '../audio/audioManager';
+import { audio, type SoundId } from '../audio/audioManager';
 import { renderArena, type ArenaLayout } from './renderArena';
 import { renderFighter } from './renderFighter';
 import { renderBoss } from './renderBoss';
@@ -200,6 +200,22 @@ interface TornadoEffect {
   hasHitEnemy: boolean;
 }
 
+// Mosquito pass (points 44-46): a rare, low-stakes distraction from
+// higher campaign levels onward — hovers briefly, dives at whichever
+// target it picked (player OR the current enemy, so it can create a comic
+// moment against a boss too), stings for trivial damage, then flies off.
+// Never the main event; see the spawn-chance check in updatePlaying.
+interface MosquitoState {
+  x: number;
+  y: number;
+  targetKind: 'player' | 'enemy';
+  phase: 'flying' | 'diving' | 'retreating';
+  ageMs: number;
+  phaseAgeMs: number;
+  stung: boolean;
+}
+const MOSQUITO_MIN_LEVEL = 6;
+
 // Section 8 (quality update): campaign levels that grant the player a
 // one-time throwable bonus weapon — a handful of deliberate milestones,
 // not every level, and never boss levels (so the reward doesn't compete
@@ -292,6 +308,11 @@ export class GameEngine {
   // scheduled particle bursts — a real world-space effect, like the beam/
   // raven/stork effects below, rather than something attached to a fighter.
   private tornadoEffect: TornadoEffect | null = null;
+  // Mosquito pass: current mosquito (if any) and a cooldown before the next
+  // spawn ROLL is even attempted — the roll itself only succeeds sometimes,
+  // so real appearances stay rare (see updatePlaying).
+  private mosquito: MosquitoState | null = null;
+  private mosquitoCheckCooldownMs = 12000 + Math.random() * 8000;
 
   score = 0;
   combo = 0;
@@ -981,6 +1002,151 @@ export class GameEngine {
     if (swarm.ageMs >= swarm.totalMs) this.beeSwarmEffect = null;
   }
 
+  // Mosquito pass (points 44-46): only rolls for a spawn once the current
+  // level is high enough and no mosquito is already active, and even then
+  // only some of the time — the long cooldown between rolls plus this
+  // chance together keep real appearances rare regardless of how long a
+  // fight runs.
+  private updateMosquitoSpawn(dtMs: number): void {
+    if (this.mosquito || this.levelIndex < MOSQUITO_MIN_LEVEL) return;
+    this.mosquitoCheckCooldownMs -= dtMs;
+    if (this.mosquitoCheckCooldownMs > 0) return;
+    this.mosquitoCheckCooldownMs = 16000 + Math.random() * 14000;
+    if (Math.random() < 0.4) this.spawnMosquito();
+  }
+
+  private spawnMosquito(): void {
+    const targetKind: 'player' | 'enemy' = this.enemy && !this.enemy.isDead && Math.random() < 0.5 ? 'enemy' : 'player';
+    this.mosquito = {
+      x: this.layout.minX + Math.random() * (this.layout.maxX - this.layout.minX),
+      y: this.layout.groundY - 260 - Math.random() * 50,
+      targetKind,
+      phase: 'flying',
+      ageMs: 0,
+      phaseAgeMs: 0,
+      stung: false,
+    };
+    audio.play('mosquitoBuzz');
+  }
+
+  private updateMosquito(dtMs: number): void {
+    const m = this.mosquito;
+    if (!m) return;
+    const target = m.targetKind === 'player' ? this.player : this.enemy;
+    if (!target || target.isDead) {
+      this.mosquito = null;
+      return;
+    }
+    m.ageMs += dtMs;
+    m.phaseAgeMs += dtMs;
+    const dtSec = dtMs / 1000;
+
+    if (m.phase === 'flying') {
+      // A brief, lazy hover before it commits to a target (point 45: "Mücke
+      // erscheint oben. Fliegt herum. Wählt Ziel.").
+      m.x += Math.sin(m.ageMs / 220) * 40 * dtSec;
+      m.y += Math.cos(m.ageMs / 170) * 18 * dtSec;
+      if (m.phaseAgeMs > 900) {
+        m.phase = 'diving';
+        m.phaseAgeMs = 0;
+      }
+    } else if (m.phase === 'diving') {
+      const dx = target.body.pos.x - m.x;
+      const dy = this.layout.groundY - 70 * target.scale - m.y;
+      const dist = Math.hypot(dx, dy) || 1;
+      const speed = 460;
+      m.x += (dx / dist) * speed * dtSec;
+      m.y += (dy / dist) * speed * dtSec;
+      if (dist < 18 && !m.stung) {
+        m.stung = true;
+        this.mosquitoSting(target);
+        m.phase = 'retreating';
+        m.phaseAgeMs = 0;
+      }
+    } else {
+      // retreating
+      m.y -= 260 * dtSec;
+      m.x += Math.sin(m.ageMs / 140) * 34 * dtSec;
+      if (m.y < this.layout.groundY - 420 || m.phaseAgeMs > 1600) {
+        this.mosquito = null;
+        return;
+      }
+    }
+
+    // The player can swat it out of the air mid-attack — a tiny, fragile
+    // hitbox (any weapon's normal reach kills it instantly), never a real
+    // fight of its own.
+    if (this.mosquito) {
+      const p = this.player;
+      if ((p.anim === 'attack' || p.anim === 'kick') && p.animTimeMs >= p.attackTelegraphMs) {
+        const weapon = WEAPONS[p.anim === 'kick' ? 'fists' : p.weaponId];
+        if (distance({ x: m.x, y: m.y }, p.body.pos) < weapon.range + 40) {
+          this.killMosquito();
+        }
+      }
+    }
+  }
+
+  // Point 45: "Stich -> Ziel springt zurück -> AU! -> Mücke fliegt weg."
+  // Trivial fixed damage — it must never read as a real threat next to the
+  // main fight.
+  private mosquitoSting(target: Fighter): void {
+    if (target.isDead) return;
+    this.dealDamageTo(target, 3, false);
+    target.setAnim('hit', true);
+    target.hitstunRemainingMs = Math.max(target.hitstunRemainingMs, 240);
+    applyKnockback(target.body, target === this.player ? -1 : 1, 90, 0.25);
+    audio.play('mosquitoSting');
+    this.spawnComicText('AU!', target.body.pos.x, this.layout.groundY - 150 * target.scale, '#ff5252');
+    this.particles.burst({ x: target.body.pos.x, y: this.layout.groundY - 100 * target.scale }, 6, {
+      color: '#e53935', shape: 'spark', size: 4, life: 0.3, maxLife: 0.3,
+    });
+  }
+
+  private killMosquito(): void {
+    if (!this.mosquito) return;
+    this.particles.burst({ x: this.mosquito.x, y: this.mosquito.y }, 8, {
+      color: '#455a64', shape: 'spark', size: 4, life: 0.3, maxLife: 0.3,
+    });
+    this.mosquito = null;
+    this.addScore(20);
+  }
+
+  private renderMosquito(ctx: CanvasRenderingContext2D): void {
+    const m = this.mosquito;
+    if (!m) return;
+    const flap = Math.sin(m.ageMs / 22) * 4;
+    ctx.save();
+    ctx.translate(m.x, m.y);
+    ctx.fillStyle = 'rgba(120,140,150,0.55)';
+    ctx.beginPath();
+    ctx.ellipse(-2, -3 - flap, 5.5, 2, -0.35, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(2, -3 + flap, 5.5, 2, 0.35, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#37474f';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 5, 2.6, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(-4, -1, 1.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#263238';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-5.5, -1);
+    ctx.lineTo(-9, 0);
+    ctx.stroke();
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(side * 2, 1.5);
+      ctx.lineTo(side * 6, 5);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   private updateRaven(dtMs: number): void {
     const raven = this.raven;
     if (!raven) return;
@@ -1306,6 +1472,33 @@ export class GameEngine {
   // Attack execution shared by player + enemies
   // ---------------------------------------------------------------------
 
+  // Quality pass (point 38): "jede Waffe braucht eigene Sounds" — a swing
+  // sound picked by weapon identity rather than one generic sound for
+  // everything. The bow is handled separately (draw/release) at the call
+  // sites above/below.
+  private weaponSwingSound(weaponId: WeaponId): SoundId {
+    switch (weaponId) {
+      case 'sword': return 'swordSwing';
+      case 'spear': return 'spearThrust';
+      case 'axe':
+      case 'club': return 'axeSwing';
+      default: return 'weaponSwing';
+    }
+  }
+
+  // The weapon-flavor sound layered on top of the existing damage-tier hit
+  // sound (hit/heavyHit/criticalHit) at the moment a hit actually lands —
+  // tier still conveys how hard it landed, this conveys what landed it.
+  private weaponHitSound(weaponId: WeaponId): SoundId | null {
+    switch (weaponId) {
+      case 'sword': return 'swordHit';
+      case 'spear': return 'spearHit';
+      case 'axe':
+      case 'club': return 'axeHit';
+      default: return null;
+    }
+  }
+
   private startAttack(f: Fighter, isKick: boolean): void {
     f.setAnim(isKick ? 'kick' : 'attack', true);
     const weapon = WEAPONS[isKick ? 'fists' : f.weaponId];
@@ -1316,7 +1509,10 @@ export class GameEngine {
     if (f.kind !== 'player') f.attackCooldownRemainingMs += f.recoveryBonusMs;
     (f as Fighter & { pendingHitApplied?: boolean }).pendingHitApplied = false;
     f.weaponFlashMs = 120;
-    audio.play('weaponSwing');
+    // Quality pass (point 38): the bow's own "String" cue plays here (draw,
+    // right as the attack starts) and its "Twang" release plays at the
+    // actual arrow spawn below — every other weapon just gets its swing.
+    audio.play(isKick ? 'weaponSwing' : weapon.id === 'bow' ? 'bowDraw' : this.weaponSwingSound(weapon.id));
 
     const shape = weapon.shape;
     if (shape === 'ranged' || shape === 'boomerang') {
@@ -1338,7 +1534,7 @@ export class GameEngine {
       returning: false,
       life: 2.2,
     });
-    audio.play('weaponSwing');
+    audio.play(weapon.id === 'bow' ? 'bowRelease' : 'weaponSwing');
   }
 
   // ---------------------------------------------------------------------
@@ -1380,6 +1576,7 @@ export class GameEngine {
     this.updateRaven(dtMs);
     this.updateChickenRun(dtMs);
     this.updateBeeSwarmEffect(dtMs);
+    this.updateMosquito(dtMs);
 
     if (this.toastTimerMs > 0) {
       this.toastTimerMs -= rawDtMs;
@@ -1506,6 +1703,7 @@ export class GameEngine {
     this.updateProjectiles(dtSec);
     this.updateHazards(dtSec);
     this.updateTornadoEffect(dtMs);
+    this.updateMosquitoSpawn(dtMs);
     this.updateStork(dtMs);
     if (this.airSupportCooldownMs > 0) this.airSupportCooldownMs -= dtMs;
 
@@ -1592,6 +1790,34 @@ export class GameEngine {
       }
     }
 
+    // Point 18: normal enemies occasionally make a small mistake — stumble/
+    // lose their balance for a beat — instead of always acting perfectly.
+    // Reuses the boss taunt fields above (unused by non-boss fighters)
+    // rather than adding new ones. Rare and brief by design: a long
+    // cooldown between rolls, a low chance per roll, and well under a
+    // second of lost control — a readable flavor beat and a small opening,
+    // never a real stun or something the player has to play around.
+    if (enemy.aiType !== 'boss') {
+      if (enemy.tauntActiveMs > 0) {
+        enemy.tauntActiveMs -= dtMs;
+        enemy.body.vel.x *= 0.5;
+        if (enemy.tauntActiveMs <= 0) {
+          enemy.setAnim('idle');
+        } else {
+          return;
+        }
+      } else {
+        enemy.gestureCooldownMs -= dtMs;
+        if (enemy.gestureCooldownMs <= 0) {
+          enemy.gestureCooldownMs = 14000 + Math.random() * 18000;
+          if (enemy.canAct() && Math.random() < 0.22) {
+            this.triggerEnemyMistake(enemy);
+            return;
+          }
+        }
+      }
+    }
+
     const decision = decideAiAction(enemy, this.player);
     if (decision.moveDir !== 0) {
       enemy.body.vel.x = decision.moveDir * enemy.effectiveMoveSpeed();
@@ -1615,6 +1841,14 @@ export class GameEngine {
     if (decision.wantsBlock) enemy.setAnim('block');
     if (decision.wantsAttack) this.startAttack(enemy, decision.wantsKick);
     void dtSec;
+  }
+
+  private triggerEnemyMistake(enemy: Fighter): void {
+    enemy.tauntActiveMs = 550 + Math.random() * 350;
+    enemy.setAnim('stagger', true);
+    enemy.body.vel.x = 0;
+    const lines = ['Huch?!', 'Hoppla!', 'Autsch!'];
+    this.spawnComicText(lines[Math.floor(Math.random() * lines.length)], enemy.body.pos.x, this.layout.groundY - 150 * enemy.scale, '#ffd54f');
   }
 
   private executeBossAbility(boss: Fighter, id: string): void {
@@ -1764,6 +1998,14 @@ export class GameEngine {
     }
 
     audio.play(hit.tier === 'critical' ? 'criticalHit' : hit.tier === 'heavy' ? 'heavyHit' : 'hit');
+    // Quality pass (point 38): a weapon-flavor sound layered on top of the
+    // tier sound above — e.g. a sword's metallic "Kling" or an axe's blunt
+    // "Impact" — so a hit sounds like what actually landed it, not just how
+    // hard. Kicks/fists have no weapon flavor of their own.
+    if (!isKick) {
+      const flavor = this.weaponHitSound(weapon.id);
+      if (flavor) audio.play(flavor);
+    }
     audio.vibrate(hit.tier === 'critical' ? [10, 20, 30] : hit.tier === 'heavy' ? 20 : 10);
     this.shake.add(hit.tier === 'critical' ? 0.55 : hit.tier === 'heavy' ? 0.3 : 0.12);
     if (hit.tier === 'critical') this.hitStop.trigger(BALANCE.hit.critHitStopMs);
@@ -2771,6 +3013,7 @@ export class GameEngine {
     this.renderStork(ctx);
     this.renderChickenRun(ctx);
     this.renderBeeSwarmEffect(ctx);
+    this.renderMosquito(ctx);
     this.renderRaven(ctx);
     this.renderBeamEffect(ctx);
     this.renderTornadoEffect(ctx);

@@ -9,6 +9,7 @@ import { CampaignCompleteOverlay } from '../components/CampaignCompleteOverlay';
 import { TutorialOverlay } from '../components/TutorialOverlay';
 import { ShopOverlay } from '../components/ShopOverlay';
 import { WEAPONS } from '../data/weapons';
+import { SUPERPOWERS } from '../data/superpowers';
 import { BALANCE, shouldOfferUpgrade } from '../data/balance';
 import { audio } from '../game/audio/audioManager';
 
@@ -47,7 +48,15 @@ export function GameScreen() {
       if (h.phase === 'levelWon' && !wasLevelWon.current) {
         wasLevelWon.current = true;
         const finalBoss = engine.levelIndex === BALANCE.campaign.totalLevels && engine.isBossLevel;
-        recordKill(engine.isBossLevel ? (engine.bossDefId ?? undefined) : undefined);
+        const newlyUnlocked = recordKill(engine.isBossLevel ? (engine.bossDefId ?? undefined) : undefined);
+        // Point 59: a boss kill that unlocks a new permanent superpower is a
+        // real milestone — replace the engine's own brief "SIEG!" toast with
+        // a proper showcase naming what was just earned.
+        if (engine.isBossLevel && newlyUnlocked.length > 0) {
+          const def = SUPERPOWERS[newlyUnlocked[0]];
+          engine.toastMessage = `🏆 BOSS BESIEGT! Neue Spezialfähigkeit: ${def.icon} ${def.name}`;
+          engine.toastTimerMs = 3200;
+        }
         if (finalBoss) {
           setStage('campaignComplete');
         } else {

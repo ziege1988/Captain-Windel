@@ -7,7 +7,13 @@ export type SoundId =
   | 'enemyHit' | 'vomit' | 'explosion' | 'superpower'
   | 'victory' | 'gameOver' | 'bossIntro' | 'block' | 'dodge' | 'upgrade' | 'menuTap'
   | 'storkFlyby' | 'surprise' | 'diaperSplat'
-  | 'coinPickup' | 'heartPickup' | 'shopBuy' | 'specialActivate' | 'laserCharge' | 'laserFire' | 'ravenCaw';
+  | 'coinPickup' | 'heartPickup' | 'shopBuy' | 'specialActivate' | 'laserCharge' | 'laserFire' | 'ravenCaw'
+  // Quality pass: per-weapon swing + impact sounds (point 38) — layered on
+  // top of the existing damage-tier hit sound (hit/heavyHit/criticalHit),
+  // which keeps conveying how hard a hit landed, while these convey WHAT
+  // landed it.
+  | 'swordSwing' | 'swordHit' | 'spearThrust' | 'spearHit' | 'axeSwing' | 'axeHit' | 'bowDraw' | 'bowRelease'
+  | 'mosquitoBuzz' | 'mosquitoSting';
 
 interface SoundSpec {
   wave: OscillatorType | 'noise';
@@ -63,6 +69,31 @@ const SOUND_SPECS: Record<SoundId, SoundSpec> = {
   // A short, coarse caw for the raven companion's personality beats —
   // noise-based so it reads as a bird call rather than a musical tone.
   ravenCaw: { wave: 'noise', freqStart: 900, freqEnd: 500, durationMs: 140, volume: 0.28, attackMs: 2, punch: true },
+
+  // Quality pass (point 38): "Schwert: Swoosh -> Kling" — a crisper swing
+  // than the generic weaponSwing, and a bright, ringing metallic tone
+  // (long-ish sine decay, no noise/punch layer) for the clang instead of a
+  // dull thump.
+  swordSwing: { wave: 'triangle', freqStart: 580, freqEnd: 360, durationMs: 85, volume: 0.17, attackMs: 4 },
+  swordHit: { wave: 'sine', freqStart: 1250, freqEnd: 880, durationMs: 190, volume: 0.28, attackMs: 2 },
+  // "Speer: Whoosh -> Thud" — a longer, deeper sweep for the thrust and a
+  // low, soft (not sharp) impact.
+  spearThrust: { wave: 'sine', freqStart: 380, freqEnd: 190, durationMs: 150, volume: 0.18, attackMs: 6 },
+  spearHit: { wave: 'noise', freqStart: 150, freqEnd: 60, durationMs: 130, volume: 0.32, attackMs: 4, punch: true },
+  // "Axt: Whoom -> Impact" — a slow, heavy low-end sweep and a big, blunt
+  // punch on landing.
+  axeSwing: { wave: 'sawtooth', freqStart: 150, freqEnd: 85, durationMs: 170, volume: 0.19, attackMs: 8 },
+  axeHit: { wave: 'noise', freqStart: 210, freqEnd: 40, durationMs: 220, volume: 0.48, attackMs: 3, punch: true },
+  // "Bogen: String -> Twang" — a quick plucked-string pull, then a
+  // brighter, higher release as the arrow actually lets go.
+  bowDraw: { wave: 'triangle', freqStart: 300, freqEnd: 480, durationMs: 90, volume: 0.16, attackMs: 3 },
+  bowRelease: { wave: 'triangle', freqStart: 720, freqEnd: 1150, durationMs: 140, volume: 0.3, attackMs: 2 },
+
+  // Mosquito pass: a thin, high, wavering buzz for its flight and a tiny
+  // sharp sting — deliberately small/annoying-in-a-good-way, never as
+  // weighty as a real combat hit.
+  mosquitoBuzz: { wave: 'sawtooth', freqStart: 480, freqEnd: 540, durationMs: 220, volume: 0.12, attackMs: 10 },
+  mosquitoSting: { wave: 'square', freqStart: 1400, freqEnd: 1000, durationMs: 60, volume: 0.22, attackMs: 1 },
 };
 
 // Section 4/5/7 (polish pass): several distinct fart "personalities" —
