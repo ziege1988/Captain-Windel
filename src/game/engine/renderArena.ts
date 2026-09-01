@@ -85,12 +85,24 @@ export function renderArena(ctx: CanvasRenderingContext2D, arena: ArenaDef, layo
   ctx.fillStyle = groundGrad;
   ctx.fillRect(0, groundY, width, height - groundY);
 
-  // Small decorative flowers / rocks depending on palette.
+  // Small decorative flowers, scattered irregularly across the meadow (a
+  // fixed-multiplier formula reads as a visible grid once you look for it)
+  // and swaying in the same wind as the grass beside them instead of
+  // standing perfectly still.
   if (!arena.isDark && (arena.palette === 'meadow' || arena.palette === 'forest')) {
-    for (let i = 0; i < 8; i++) {
-      const fx = (i * 97 + 40) % width;
-      const fy = groundY + 18 + ((i * 53) % (height - groundY - 30));
-      drawFlower(ctx, fx, fy, arena.accentColor);
+    const flowerGust = windGust(timeSec);
+    for (let i = 0; i < 14; i++) {
+      const h1 = hash01(i + 40000);
+      const h2 = hash01(i + 41000);
+      const h3 = hash01(i + 42000);
+      const h4 = hash01(i + 43000);
+      const fx = h1 * width;
+      const fy = groundY + 14 + h2 * Math.min(70, height - groundY - 24);
+      const speed = 0.9 + h3 * 0.8;
+      const phase = h1 * Math.PI * 2;
+      const swayPx = Math.sin(timeSec * speed + phase) * (1.5 + h4 * 2.5 + flowerGust * 5);
+      const size = 0.75 + h3 * 0.55;
+      drawFlower(ctx, fx, fy, arena.accentColor, swayPx, size);
     }
   }
 
@@ -436,18 +448,33 @@ function drawChaosSparkles(ctx: CanvasRenderingContext2D, width: number, groundY
   ctx.restore();
 }
 
-function drawFlower(ctx: CanvasRenderingContext2D, x: number, y: number, color: string): void {
+function drawFlower(ctx: CanvasRenderingContext2D, x: number, y: number, color: string, swayPx = 0, size = 1): void {
   ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(size, size);
+  // A short stem rooted at the ground with the head swaying at the top —
+  // same "fixed base, moving tip" shape as the grass blades beside it,
+  // rather than the whole flower rigidly rotating in place (which a
+  // 5-fold-symmetric bloom would barely show).
+  ctx.strokeStyle = 'rgba(30,70,25,0.55)';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(0, 6);
+  ctx.quadraticCurveTo(swayPx * 0.5, 2, swayPx, -2);
+  ctx.stroke();
+
+  const hx = swayPx;
+  const hy = -2;
   ctx.fillStyle = color;
   for (let i = 0; i < 5; i++) {
     const a = (i / 5) * Math.PI * 2;
     ctx.beginPath();
-    ctx.arc(x + Math.cos(a) * 4, y + Math.sin(a) * 4, 3, 0, Math.PI * 2);
+    ctx.arc(hx + Math.cos(a) * 4, hy + Math.sin(a) * 4, 3, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.fillStyle = '#fff176';
   ctx.beginPath();
-  ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+  ctx.arc(hx, hy, 2.5, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
