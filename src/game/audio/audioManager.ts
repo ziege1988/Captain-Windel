@@ -13,7 +13,13 @@ export type SoundId =
   // which keeps conveying how hard a hit landed, while these convey WHAT
   // landed it.
   | 'swordSwing' | 'swordHit' | 'spearThrust' | 'spearHit' | 'axeSwing' | 'axeHit' | 'bowDraw' | 'bowRelease'
-  | 'mosquitoBuzz' | 'mosquitoSting';
+  | 'mosquitoBuzz' | 'mosquitoSting'
+  // Banana pratfall: a comedy upward squeak (feet shooting out) followed by
+  // the dull thud of landing flat on the ground.
+  | 'slip' | 'bodyThud'
+  // Klopapier weapon: the roll spinning out, and the paper ripping open
+  // again when the target tears free.
+  | 'paperWrap' | 'paperTear';
 
 interface SoundSpec {
   wave: OscillatorType | 'noise';
@@ -94,6 +100,10 @@ const SOUND_SPECS: Record<SoundId, SoundSpec> = {
   // weighty as a real combat hit.
   mosquitoBuzz: { wave: 'sawtooth', freqStart: 480, freqEnd: 540, durationMs: 220, volume: 0.12, attackMs: 10 },
   mosquitoSting: { wave: 'square', freqStart: 1400, freqEnd: 1000, durationMs: 60, volume: 0.22, attackMs: 1 },
+  slip: { wave: 'triangle', freqStart: 260, freqEnd: 1150, durationMs: 190, volume: 0.3, attackMs: 6 },
+  bodyThud: { wave: 'noise', freqStart: 190, freqEnd: 55, durationMs: 210, volume: 0.42, attackMs: 2, punch: true },
+  paperWrap: { wave: 'noise', freqStart: 1500, freqEnd: 2400, durationMs: 340, volume: 0.24, attackMs: 12 },
+  paperTear: { wave: 'noise', freqStart: 2600, freqEnd: 900, durationMs: 260, volume: 0.3, attackMs: 3 },
 };
 
 // Section 4/5/7 (polish pass): several distinct fart "personalities" —

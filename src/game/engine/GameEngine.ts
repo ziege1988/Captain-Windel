@@ -41,6 +41,10 @@ export interface HudState {
   hasBonusWeapon: boolean;
   airSupportUnlocked: boolean;
   airSupportCooldownMs: number;
+  // Banana-peel cooldown, surfaced so the touch button can actually show
+  // when it is unavailable — without it the button silently no-ops and
+  // reads as broken (see placeBananaPeel).
+  bananaCooldownMs: number;
   hasStorkBonusWeapon: boolean;
   // Persistent-progression pass.
   coins: number;
@@ -308,6 +312,8 @@ export class GameEngine {
   // scheduled particle bursts — a real world-space effect, like the beam/
   // raven/stork effects below, rather than something attached to a fighter.
   private tornadoEffect: TornadoEffect | null = null;
+  // Klopapier weapon: the paper ribbon flying from hand to target on a hit.
+  private paperThrow: { fromX: number; fromY: number; toX: number; toY: number; ageMs: number; totalMs: number } | null = null;
   // Mosquito pass: current mosquito (if any) and a cooldown before the next
   // spawn ROLL is even attempted — the roll itself only succeeds sometimes,
   // so real appearances stay rare (see updatePlaying).
@@ -334,6 +340,11 @@ export class GameEngine {
   // routine every-fight button.
   static readonly AIR_SUPPORT_UNLOCK_LEVEL = 18;
   static readonly AIR_SUPPORT_COOLDOWN_MS = 42000;
+  // Banana peel cooldown. The button used to give no feedback at all while
+  // this was ticking, so a player pressing it during the wait concluded it
+  // had stopped working — TouchControls now shows the remaining seconds,
+  // and the wait itself is a little shorter.
+  static readonly BANANA_COOLDOWN_MS = 5000;
   airSupportCooldownMs = 0;
   storkFlight: StorkFlight | null = null;
 
@@ -623,7 +634,7 @@ export class GameEngine {
     if (this.phase !== 'playing') return;
     if (!this.player.equippedUpgradeIds.includes('banana_peel')) return;
     if (this.player.bananaCooldownMs > 0) return;
-    this.player.bananaCooldownMs = 7000;
+    this.player.bananaCooldownMs = GameEngine.BANANA_COOLDOWN_MS;
     hazardCounter += 1;
     this.hazards.push({
       id: hazardCounter,
@@ -1710,6 +1721,9 @@ export class GameEngine {
     this.updateProjectiles(dtSec);
     this.updateHazards(dtSec);
     this.updateTornadoEffect(dtMs);
+    this.updatePaperThrow(dtMs);
+    this.consumeWrapBreak(player);
+    if (enemy) this.consumeWrapBreak(enemy);
     this.updateMosquitoSpawn(dtMs);
     this.updateStork(dtMs);
     if (this.airSupportCooldownMs > 0) this.airSupportCooldownMs -= dtMs;
@@ -1748,6 +1762,17 @@ export class GameEngine {
   }
 
   private updateEnemyAi(enemy: Fighter, dtMs: number, dtSec: number): void {
+    // Banana pratfall: while the slip sequence runs the enemy is genuinely
+    // out of the fight. Bailing out here (rather than only relying on
+    // canAct()) matters because the movement/pose block further down
+    // rewrites enemy.anim every single frame, which would overwrite the
+    // fall/get-up/dizzy poses the moment they were set.
+    if (enemy.slipSequenceMs > 0 || enemy.wrappedUntilMs > 0) {
+      enemy.body.vel.x *= 0.9;
+      enemy.isBlocking = false;
+      void dtSec;
+      return;
+    }
     if (enemy.aiType === 'boss' && this.bossDefId) {
       const def = BOSSES[this.bossDefId];
       const dist = distance(enemy.body.pos, this.player.body.pos);
@@ -2046,6 +2071,35 @@ export class GameEngine {
       if (hit.staggered) this.addScore(BALANCE.score.knockdown);
     }
 
+    // Klopapier: the payoff isn't the (deliberately small) damage, it's the
+    // wrap — the roll spins around the target, pins its arms and leaves it
+    // helpless until it tears its way out. Fighter.applyWrap enforces its
+    // own immunity window afterwards, so this can open a punish window but
+    // never chain into a permanent lock.
+    if (weapon.id === 'toiletPaper' && !isKick && !defender.isDead) {
+      const wrapMs = defender.kind === 'boss' ? 950 : 1900;
+      if (defender.applyWrap(wrapMs)) {
+        const handY = this.layout.groundY - 110 * attacker.scale;
+        const bodyY = this.layout.groundY - 80 * defender.scale;
+        this.paperThrow = {
+          fromX: attacker.body.pos.x + attacker.facing * 26 * attacker.scale,
+          fromY: handY,
+          toX: defender.body.pos.x,
+          toY: bodyY,
+          ageMs: 0,
+          totalMs: 420,
+        };
+        this.particles.burst({ x: defender.body.pos.x, y: bodyY }, 12, {
+          color: '#ffffff', shape: 'shard', size: 7, life: 0.5, maxLife: 0.5, gravity: 120,
+        });
+        audio.play('paperWrap');
+        if (attacker.kind === 'player') {
+          this.showToast('EINGEWICKELT!', 1100);
+          this.addScore(250);
+        }
+      }
+    }
+
     if (hit.vomit && !defender.isDead) {
       defender.vomitTimerMs = 900;
       audio.play('vomit');
@@ -2207,6 +2261,69 @@ export class GameEngine {
   // and it checks for the enemy continuously rather than at one scheduled
   // instant, so however fast or slow a run happens to tick, the lift fires
   // exactly when the funnel visually reaches them.
+  /** Klopapier weapon: the paper visibly flying from the attacker's hand
+   * and spinning around the target. Purely visual — the wrap itself is
+   * already applied on the hit (see applyHit / Fighter.applyWrap) — but it
+   * is what sells "the character quickly wraps the enemy up" rather than
+   * bands simply appearing out of nowhere. */
+  /** Plays the "tears its way out" beat once, the frame a wrap expires. */
+  private consumeWrapBreak(f: Fighter): void {
+    if (!f.wrapBreakPending) return;
+    f.wrapBreakPending = false;
+    if (f.isDead) return;
+    const y = this.layout.groundY - 80 * f.scale;
+    this.particles.burst({ x: f.body.pos.x, y }, 18, {
+      color: '#ffffff', shape: 'shard', size: 9, life: 0.75, maxLife: 0.75, gravity: 260,
+    });
+    audio.play('paperTear');
+    this.spawnComicText('RATSCH!', f.body.pos.x, y - 40, '#eceff1');
+  }
+
+  private updatePaperThrow(dtMs: number): void {
+    const p = this.paperThrow;
+    if (!p) return;
+    p.ageMs += dtMs;
+    if (p.ageMs >= p.totalMs) this.paperThrow = null;
+  }
+
+  private renderPaperThrow(ctx: CanvasRenderingContext2D): void {
+    const p = this.paperThrow;
+    if (!p) return;
+    const t = Math.min(1, p.ageMs / p.totalMs);
+    // The streamer unspools from the hand towards the target, then the tail
+    // end catches up and the whole thing is gone.
+    const head = Math.min(1, t * 1.6);
+    const tail = Math.max(0, (t - 0.45) / 0.55);
+    if (head <= tail) return;
+    const dx = p.toX - p.fromX;
+    const dy = p.toY - p.fromY;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+
+    ctx.save();
+    ctx.strokeStyle = '#fbfbf8';
+    ctx.lineWidth = 7;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    const steps = 18;
+    for (let i = 0; i <= steps; i++) {
+      const k = tail + (head - tail) * (i / steps);
+      // A flat ribbon rippling as it flies, not a straight rope.
+      const ripple = Math.sin(k * 14 - p.ageMs / 26) * 11 * Math.sin(Math.PI * k);
+      const x = p.fromX + dx * k + nx * ripple;
+      const y = p.fromY + dy * k + ny * ripple;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(150,150,144,0.5)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  }
+
   private updateTornadoEffect(dtMs: number): void {
     const tornado = this.tornadoEffect;
     if (!tornado) return;
@@ -2704,19 +2821,30 @@ export class GameEngine {
       }
     } else if (h.kind === 'banana') {
       if (directTarget && directTarget.kind !== 'player') {
-        // Humorous effects pass: a real slip, not a generic stagger — legs
-        // fly out, the enemy briefly falls, and classic cartoon birds circle
-        // its head while it's dazed. Short duration (helpful, not
-        // overpowered): just long enough for a free follow-up hit.
-        this.particles.burst(h.pos, 8, { color: '#fdd835', shape: 'spark' });
-        audio.play('hit');
-        directTarget.setAnim('dazed', true);
-        const dazeMs = 1100;
-        directTarget.hitstunRemainingMs = dazeMs;
-        directTarget.dazedUntilMs = dazeMs;
-        applyKnockback(directTarget.body, directTarget.facing, 140, 0.5);
+        // The old version was one flat 'dazed' pose for 1.1s, which is why
+        // the peel felt like it did nothing: the enemy barely reacted and
+        // was back in the fight before the player could capitalise. This is
+        // the full cartoon pratfall the brief asks for — the feet shoot out
+        // from under it, it skids along the ground on its back, climbs back
+        // up, and then stands there completely helpless with birds circling
+        // its head (Fighter.startSlip drives the three beats, and
+        // updateEnemyAi hands the enemy no decisions at all meanwhile).
+        this.particles.burst(h.pos, 10, { color: '#fdd835', shape: 'spark', size: 7 });
+        this.particles.burst(
+          { x: h.pos.x, y: this.layout.groundY },
+          14,
+          { color: '#c8b273', shape: 'dust', size: 9, life: 0.55, maxLife: 0.55 },
+        );
+        audio.play('slip');
+        audio.play('bodyThud');
+        this.shake.add(0.22);
+        directTarget.startSlip();
+        // A hard sideways skid rather than a pop-up, so the fall reads as
+        // "the ground went out from under it" instead of a knockback hit.
+        applyKnockback(directTarget.body, directTarget.facing, 330, 0);
+        this.spawnComicText('WUPPS!', h.pos.x, this.layout.groundY - 120 * directTarget.scale, '#fdd835');
         this.addScore(400);
-        this.showToast('AUSGERUTSCHT!');
+        this.showToast('AUSGERUTSCHT!', 1400);
       }
     } else if (h.kind === 'bonusBomb') {
       // Section 8 (quality update): a real explosion with a real AoE hit —
@@ -3097,6 +3225,7 @@ export class GameEngine {
     this.renderRaven(ctx);
     this.renderBeamEffect(ctx);
     this.renderTornadoEffect(ctx);
+    this.renderPaperThrow(ctx);
     this.particles.render(ctx);
     this.renderComicTexts(ctx);
     ctx.restore();
@@ -3591,6 +3720,7 @@ export class GameEngine {
       hasBonusWeapon: this.player.hasBonusWeapon,
       airSupportUnlocked: this.levelIndex >= GameEngine.AIR_SUPPORT_UNLOCK_LEVEL,
       airSupportCooldownMs: Math.max(0, this.airSupportCooldownMs),
+      bananaCooldownMs: Math.max(0, this.player.bananaCooldownMs),
       hasStorkBonusWeapon: this.player.hasStorkBonusWeapon,
       // Persistent-progression pass: read the coin balance fresh from the
       // store rather than this.save — the store replaces the save object

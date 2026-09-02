@@ -1,6 +1,7 @@
 import { useAppStore } from '../state/appStore';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { isPersistent } from '../storage/storage';
+import { PLAYER_WEAPON_IDS } from '../data/weapons';
 
 // Section 34: locally persisted highscore stats.
 export function HighscoreScreen() {
@@ -16,7 +17,7 @@ export function HighscoreScreen() {
         <Row label="Höchstes Level" value={String(save.highestLevelReached)} />
         <Row label="Höchste Combo" value={`x${save.highestCombo}`} />
         <Row label="Besiegte Bosse" value={`${save.bossesDefeated.length} / 10`} />
-        <Row label="Freigeschaltete Waffen" value={`${save.unlockedWeapons.length} / 10`} />
+        <Row label="Freigeschaltete Waffen" value={`${save.unlockedWeapons.length} / ${PLAYER_WEAPON_IDS.length}`} />
         <Row label="Freigeschaltete Superkräfte" value={`${save.unlockedSuperpowers.length} / 6`} />
         {save.longestChaosRun > 0 && <Row label="Längster Chaos-Run" value={`${save.longestChaosRun} Level`} />}
       </div>

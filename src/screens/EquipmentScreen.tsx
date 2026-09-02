@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import { useAppStore } from '../state/appStore';
-import { WEAPON_LIST } from '../data/weapons';
+import { PLAYER_WEAPON_LIST } from '../data/weapons';
 import { SUPERPOWER_LIST, unlockBossName } from '../data/superpowers';
 import { BOSSES } from '../data/bosses';
 import { ScreenHeader } from '../components/ScreenHeader';
@@ -17,7 +17,7 @@ export function EquipmentScreen() {
 
       <h3 style={sectionTitleStyle}>Waffen</h3>
       <div style={gridStyle}>
-        {WEAPON_LIST.map((w) => {
+        {PLAYER_WEAPON_LIST.map((w) => {
           const unlocked = save.unlockedWeapons.includes(w.id);
           return (
             <div key={w.id} className="panel" style={{ ...cardStyle, opacity: unlocked ? 1 : 0.4 }}>

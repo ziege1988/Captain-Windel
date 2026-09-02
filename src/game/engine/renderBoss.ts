@@ -1,5 +1,5 @@
 import type { Fighter } from '../entities/Fighter';
-import { drawWeaponInHand, drawSnowPile } from './renderFighter';
+import { drawWeaponInHand, drawSnowPile, drawToiletPaperWrap } from './renderFighter';
 
 // Section (boss overhaul): bosses used to be rendered through the exact
 // same thin stick-figure rig as every normal enemy, just bigger — nothing
@@ -152,6 +152,23 @@ function computeBossPose(f: Fighter): BossPose {
         armBackX: 22 * p, armBackY: -10 * p,
       };
     }
+    case 'wrapped': {
+      // Bound up in toilet paper: arms pinned to the body, legs together,
+      // a constant struggle wobble. Same read as the stick-figure version,
+      // proportioned for the bigger boss rig.
+      const struggle = Math.sin(t * 12) * 3;
+      return {
+        ...STAND,
+        bodyLean: Math.sin(t * 5) * 0.1,
+        headOffsetX: struggle,
+        headOffsetY: Math.abs(struggle) * 0.4,
+        armFrontX: 4, armFrontY: 26,
+        armBackX: -4, armBackY: 26,
+        legFrontX: 4, legFrontY: 46,
+        legBackX: -4, legBackY: 46,
+        hipY: struggle * 0.5,
+      };
+    }
     case 'fallen':
       return { ...STAND, flatten: 1, bodyLean: 0, armFrontX: 22, armFrontY: 6, armBackX: -16, armBackY: -4 };
     case 'gettingUp':
@@ -179,6 +196,24 @@ function computeBossPose(f: Fighter): BossPose {
 
 const FOOT_SAFETY_EMBED = 2;
 const GROUND_EMBED_FLATTEN = 4;
+// Vertical nudge for the flattened (fallen/dead) rig. Applied on local-x,
+// which the +90deg rotation maps to screen-down, so a negative value lifts
+// the lying body: the spine ends up a few px above the ground line while
+// the head circle overlaps it, i.e. the figure lies *in* the ground rather
+// than hovering over it.
+const FLATTEN_GROUND_LIFT = -8;
+
+/** Ground offset for the rig, blended across the flatten range so a fighter
+ * toppling over or getting back up never jumps vertically mid-animation.
+ * Upright, the offset comes from the pose's actual lowest foot; flat on the
+ * ground the leg numbers no longer mean anything vertical, so a small fixed
+ * embed takes over. */
+function flattenGroundEmbed(f: Fighter, pose: BossPose): number {
+  const upright = -lowestFootLocalY(f, pose) + FOOT_SAFETY_EMBED;
+  const flat = GROUND_EMBED_FLATTEN;
+  const k = Math.max(0, Math.min(1, pose.flatten));
+  return upright * (1 - k) + flat * k;
+}
 
 function lowestFootLocalY(f: Fighter, pose: BossPose): number {
   return -f.height * 0.45 + pose.hipY + Math.max(pose.legFrontY, pose.legBackY, 0);
@@ -1153,7 +1188,9 @@ function drawCirclingBirds(ctx: CanvasRenderingContext2D, f: Fighter, shoulderY:
 function drawBossStatusOverlay(ctx: CanvasRenderingContext2D, f: Fighter, shoulderY: number, hipY: number): void {
   const s = f.status;
   const t = f.animTimeMs / 1000;
-  if (f.dazedUntilMs > 0) {
+  if (f.wrappedUntilMs > 0) {
+    drawToiletPaperWrap(ctx, f.wrappedUntilMs, f.wrappedTotalMs, shoulderY, hipY, 17, t);
+  } else if (f.dazedUntilMs > 0) {
     drawCirclingBirds(ctx, f, shoulderY);
   } else if (s.frozenUntilMs > 0) {
     drawSnowPile(ctx, s.frozenUntilMs, shoulderY, hipY, t);
@@ -1207,16 +1244,27 @@ export function renderBoss(ctx: CanvasRenderingContext2D, f: Fighter, dtSec = 0)
   const x = f.body.pos.x;
   const groundY = f.body.groundY;
   const airLift = groundY - f.body.pos.y;
-  const groundEmbed = f.body.grounded
-    ? (pose.flatten > 0.5 ? GROUND_EMBED_FLATTEN * scale : (-lowestFootLocalY(f, pose) + FOOT_SAFETY_EMBED) * scale)
-    : 0;
+  const groundEmbed = f.body.grounded ? flattenGroundEmbed(f, pose) * scale : 0;
 
   ctx.save();
   ctx.translate(x, groundY - airLift + groundEmbed);
   ctx.scale(f.facing * scale, scale);
-  if (pose.flatten > 0.5) {
-    ctx.rotate(Math.PI / 2);
-    ctx.translate(-f.height * 0.55, 6);
+  if (pose.flatten > 0.001) {
+    // Death/knockdown ground-anchor fix, two parts.
+    // (1) A translate applied *after* a rotate operates in the rotated
+    //     frame. With +90deg, local (a, b) lands at screen (-b, a) — so the
+    //     old (-height*0.55, 6) pushed the whole lying body ~50px
+    //     *upwards*, which is why corpses appeared to float above the
+    //     ground. Local-y is now the along-the-body axis (centering the
+    //     figure on its own x position) and local-x the vertical one (a few
+    //     px, so the spine rests just above the ground line while the head
+    //     circle nestles into it).
+    // (2) Scaling by pose.flatten instead of thresholding at 0.5 makes
+    //     falling over and climbing back up a continuous topple around the
+    //     feet, rather than a hard snap the instant the blend crosses the
+    //     halfway mark ('gettingUp' and 'bossDeath' both blend flatten).
+    ctx.rotate((Math.PI / 2) * pose.flatten);
+    ctx.translate(FLATTEN_GROUND_LIFT * pose.flatten, f.height * 0.45 * pose.flatten);
   }
 
   const flashInvuln = f.invulnerableMs > 0 && Math.floor(f.animTimeMs / 60) % 2 === 0;

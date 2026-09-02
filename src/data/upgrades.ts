@@ -68,13 +68,18 @@ export const UPGRADES: UpgradeDef[] = [
     minLevel: 6,
   },
   {
-    id: 'club_upgrade',
-    name: 'Knüppel',
-    description: 'Neue Waffe: schwer, starker Rückstoß',
+    // Replaces the old club upgrade in the player's arsenal: a control
+    // weapon instead of another blunt object. Little damage, but a landed
+    // hit spins the enemy up in toilet paper and leaves it helpless until
+    // it tears its way out. The club itself stays in the game as an enemy
+    // weapon (see enemies.ts / bosses.ts).
+    id: 'toilet_paper_upgrade',
+    name: 'Klopapier',
+    description: 'Neue Waffe: wickelt den Gegner ein und lähmt ihn kurz',
     category: 'weapon',
     weight: 6,
     equipmentSlot: null,
-    grantsWeapon: 'club',
+    grantsWeapon: 'toiletPaper',
     modifiers: {},
     minLevel: 3,
   },

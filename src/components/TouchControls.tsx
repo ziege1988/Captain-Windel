@@ -14,6 +14,7 @@ interface Props {
   hasBonusWeapon: boolean;
   airSupportUnlocked: boolean;
   airSupportCooldownMs: number;
+  bananaCooldownMs: number;
   hasStorkBonusWeapon: boolean;
   specialWeaponId: SpecialWeaponId | null;
 }
@@ -22,7 +23,7 @@ interface Props {
 // right thumb for combat actions. No control smaller than ~56px.
 export function TouchControls({
   engine, equippedSuperpowers, cooldowns, weaponName, hasBanana, hasBonusWeapon,
-  airSupportUnlocked, airSupportCooldownMs, hasStorkBonusWeapon, specialWeaponId,
+  airSupportUnlocked, airSupportCooldownMs, bananaCooldownMs, hasStorkBonusWeapon, specialWeaponId,
 }: Props) {
   const activeDir = useRef<-1 | 0 | 1>(0);
 
@@ -87,7 +88,14 @@ export function TouchControls({
         </div>
         <div style={comboRowStyle}>
           {hasBanana && (
-            <TouchButton label="🍌" size={50} onDown={() => engine.placeBananaPeel()} />
+            // The banana has a real cooldown; without showing it the button
+            // just silently did nothing between uses and read as broken.
+            <TouchButton
+              label={bananaCooldownMs > 0 ? `🍌\n${Math.ceil(bananaCooldownMs / 1000)}s` : '🍌'}
+              size={50}
+              dimmed={bananaCooldownMs > 0}
+              onDown={() => { if (bananaCooldownMs <= 0) engine.placeBananaPeel(); }}
+            />
           )}
           {hasBonusWeapon && (
             <TouchButton label="🎁💣" size={54} onDown={() => engine.throwBonusWeapon()} />
@@ -153,8 +161,8 @@ function SpecialWeaponButton({ specialWeaponId, onUse }: { specialWeaponId: Spec
 }
 
 function TouchButton({
-  label, size, onDown, onUp, primary, wide,
-}: { label: string; size: number; onDown: () => void; onUp?: () => void; primary?: boolean; wide?: boolean }) {
+  label, size, onDown, onUp, primary, wide, dimmed,
+}: { label: string; size: number; onDown: () => void; onUp?: () => void; primary?: boolean; wide?: boolean; dimmed?: boolean }) {
   return (
     <button
       onPointerDown={(e) => {
@@ -180,6 +188,7 @@ function TouchButton({
         whiteSpace: 'pre-line',
         lineHeight: 1.1,
         touchAction: 'none',
+        opacity: dimmed ? 0.45 : 1,
       }}
     >
       {label}

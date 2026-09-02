@@ -143,6 +143,7 @@ export function GameScreen() {
             hasBonusWeapon={hud.hasBonusWeapon}
             airSupportUnlocked={hud.airSupportUnlocked}
             airSupportCooldownMs={hud.airSupportCooldownMs}
+            bananaCooldownMs={hud.bananaCooldownMs}
             hasStorkBonusWeapon={hud.hasStorkBonusWeapon}
             specialWeaponId={hud.specialWeaponId}
           />

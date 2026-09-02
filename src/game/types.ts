@@ -32,7 +32,10 @@ export type AnimState =
   | 'taunt'
   | 'telegraph'
   | 'dazed'
-  | 'surprised';
+  | 'surprised'
+  // Bound up in toilet paper: arms pinned to the body, struggling in place
+  // until the wrap tears open (see Fighter.applyWrap).
+  | 'wrapped';
 
 /** Base combat stats. All multiplicative modifiers from upgrades/equipment
  * apply on top of these at read-time (see StatModifiers). */
@@ -100,7 +103,10 @@ export type WeaponId =
   | 'axe'
   | 'sword'
   | 'boomerang'
-  | 'bow';
+  | 'bow'
+  // A control weapon rather than a damage one: a landed hit spins the
+  // target up in toilet paper and paralyses it until it tears free.
+  | 'toiletPaper';
 
 export type AttackShape = 'melee' | 'thrust' | 'ranged' | 'boomerang';
 

@@ -101,6 +101,21 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     color: '#e67e22',
     projectileSpeed: 620,
   },
+  toiletPaper: {
+    id: 'toiletPaper',
+    name: 'Klopapier',
+    description: 'Wickelt den Gegner blitzschnell ein — er ist kurz gelähmt, bis er sich befreit.',
+    shape: 'melee',
+    // Low damage on purpose: the payoff is the free window the wrap opens
+    // up, not the hit itself.
+    range: 78,
+    damageMult: 0.65,
+    attackSpeedMult: 1.05,
+    knockback: 40,
+    staggerChance: 0,
+    color: '#fafafa',
+    trailColor: '#e0e0e0',
+  },
   bow: {
     id: 'bow',
     name: 'Bogen',
@@ -118,3 +133,12 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
 };
 
 export const WEAPON_LIST = Object.values(WEAPONS);
+
+// Weapons the player can actually end up holding: the starting fists plus
+// everything an upgrade grants. 'branch' and 'club' exist only as enemy
+// weapons (see enemies.ts / bosses.ts), so the arsenal screens should not
+// offer them as permanently-locked slots the player can never fill.
+export const PLAYER_WEAPON_IDS: WeaponId[] = [
+  'fists', 'boxingGloves', 'toiletPaper', 'spear', 'sword', 'axe', 'boomerang', 'bow',
+];
+export const PLAYER_WEAPON_LIST = PLAYER_WEAPON_IDS.map((id) => WEAPONS[id]);

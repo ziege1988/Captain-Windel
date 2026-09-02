@@ -1,5 +1,6 @@
 import type { CapeColorId, CharacterId, SpecialWeaponId, SuperpowerId, WeaponId } from '../game/types';
 import { storageGet, storageSet } from './storage';
+import { WEAPONS } from '../data/weapons';
 
 const SAVE_KEY = 'captainWindel.save.v1';
 
@@ -84,10 +85,32 @@ export function loadSaveData(): SaveData {
   if (!raw) return defaultSaveData();
   try {
     const parsed = JSON.parse(raw);
-    return { ...defaultSaveData(), ...parsed, settings: { ...defaultSaveData().settings, ...parsed.settings } };
+    const merged: SaveData = {
+      ...defaultSaveData(), ...parsed, settings: { ...defaultSaveData().settings, ...parsed.settings },
+    };
+    merged.unlockedWeapons = migrateUnlockedWeapons(merged.unlockedWeapons);
+    return merged;
   } catch {
     return defaultSaveData();
   }
+}
+
+/** Keeps an older save's weapon list valid against the current roster.
+ * Two things can go stale: a weapon that no longer exists at all (the old
+ * frypan), which would make WEAPONS[id] undefined and break the HUD the
+ * moment it was cycled to, and the club, which was replaced in the player's
+ * arsenal by the toilet paper (it lives on as an enemy weapon). Anyone who
+ * already earned the club gets its replacement rather than losing a slot. */
+function migrateUnlockedWeapons(ids: unknown): WeaponId[] {
+  const list = Array.isArray(ids) ? ids : [];
+  const out: WeaponId[] = ['fists'];
+  for (const raw of list) {
+    const id = raw === 'club' ? 'toiletPaper' : raw;
+    if (typeof id !== 'string') continue;
+    if (!(id in WEAPONS)) continue;
+    if (!out.includes(id as WeaponId)) out.push(id as WeaponId);
+  }
+  return out;
 }
 
 export function saveSaveData(data: SaveData): void {

@@ -210,6 +210,24 @@ function computePose(f: Fighter): Pose {
         armBackX: 20 * p, armBackY: -12 * p,
       };
     }
+    case 'wrapped': {
+      // Bound up: both arms pinned flat against the body, legs together,
+      // and a constant struggle wobble — the figure is visibly straining
+      // against the paper rather than standing calmly inside it.
+      const struggle = Math.sin(t * 13) * 2.4;
+      const lurch = Math.sin(t * 5.5) * 0.09;
+      return {
+        ...STAND,
+        bodyLean: lurch,
+        headOffsetX: struggle * 0.8,
+        headOffsetY: Math.abs(struggle) * 0.4,
+        armFrontX: 3, armFrontY: 22,
+        armBackX: -3, armBackY: 22,
+        legFrontX: 3, legFrontY: 40,
+        legBackX: -3, legBackY: 40,
+        hipY: struggle * 0.5,
+      };
+    }
     case 'fallen':
       return { ...STAND, flatten: 1, bodyLean: 0, armFrontX: 20, armFrontY: 4, armBackX: -14, armBackY: -4 };
     case 'gettingUp':
@@ -428,6 +446,24 @@ const FOOT_SAFETY_EMBED = 2;
 // keeps that case simple and stable rather than feeding it geometry that
 // no longer means what it means while standing.
 const GROUND_EMBED_FLATTEN = 4;
+// Vertical nudge for the flattened (fallen/dead) rig. Applied on local-x,
+// which the +90deg rotation maps to screen-down, so a negative value lifts
+// the lying body: the spine ends up a few px above the ground line while
+// the head circle overlaps it, i.e. the figure lies *in* the ground rather
+// than hovering over it.
+const FLATTEN_GROUND_LIFT = -8;
+
+/** Ground offset for the rig, blended across the flatten range so a fighter
+ * toppling over or getting back up never jumps vertically mid-animation.
+ * Upright, the offset comes from the pose's actual lowest foot; flat on the
+ * ground the leg numbers no longer mean anything vertical, so a small fixed
+ * embed takes over. */
+function flattenGroundEmbed(f: Fighter, pose: Pose): number {
+  const upright = -lowestFootLocalY(f, pose) + FOOT_SAFETY_EMBED;
+  const flat = GROUND_EMBED_FLATTEN;
+  const k = Math.max(0, Math.min(1, pose.flatten));
+  return upright * (1 - k) + flat * k;
+}
 
 function lowestFootLocalY(f: Fighter, pose: Pose): number {
   const hipYLocal = -f.height * 0.45 + pose.hipY;
@@ -717,11 +753,7 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   const x = f.body.pos.x;
   const groundY = f.body.groundY;
   const airLift = groundY - f.body.pos.y;
-  const groundEmbed = f.body.grounded
-    ? (pose.flatten > 0.5
-      ? GROUND_EMBED_FLATTEN * scale
-      : (-lowestFootLocalY(f, pose) + FOOT_SAFETY_EMBED) * scale)
-    : 0;
+  const groundEmbed = f.body.grounded ? flattenGroundEmbed(f, pose) * scale : 0;
 
   // Movement-quality pass 3: a real 180° turn (fart/chili/ice) — a single
   // extra horizontal-scale factor riding the same transform everything else
@@ -735,9 +767,22 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   ctx.translate(x, groundY - airLift + groundEmbed);
   ctx.scale(f.facing * scale * turnMirror, scale);
 
-  if (pose.flatten > 0.5) {
-    ctx.rotate(Math.PI / 2);
-    ctx.translate(-f.height * 0.55, 6);
+  if (pose.flatten > 0.001) {
+    // Death/knockdown ground-anchor fix, two parts.
+    // (1) A translate applied *after* a rotate operates in the rotated
+    //     frame. With +90deg, local (a, b) lands at screen (-b, a) — so the
+    //     old (-height*0.55, 6) pushed the whole lying body ~50px
+    //     *upwards*, which is why corpses appeared to float above the
+    //     ground. Local-y is now the along-the-body axis (centering the
+    //     figure on its own x position) and local-x the vertical one (a few
+    //     px, so the spine rests just above the ground line while the head
+    //     circle nestles into it).
+    // (2) Scaling by pose.flatten instead of thresholding at 0.5 makes
+    //     falling over and climbing back up a continuous topple around the
+    //     feet, rather than a hard snap the instant the blend crosses the
+    //     halfway mark ('gettingUp' and 'bossDeath' both blend flatten).
+    ctx.rotate((Math.PI / 2) * pose.flatten);
+    ctx.translate(FLATTEN_GROUND_LIFT * pose.flatten, f.height * 0.45 * pose.flatten);
   }
 
   const flashInvuln = f.invulnerableMs > 0 && Math.floor(f.animTimeMs / 60) % 2 === 0;
@@ -927,21 +972,75 @@ export function drawWeaponInHand(ctx: CanvasRenderingContext2D, f: Fighter, hand
       break;
     }
     case 'club': {
-      ctx.strokeStyle = weapon.color;
-      ctx.lineWidth = 6;
-      ctx.beginPath();
-      ctx.moveTo(-6, 0);
-      ctx.lineTo(20, 0);
-      ctx.stroke();
+      // Redrawn: this used to be a thin handle with a round blob and an
+      // inner ring stuck on the end, which read as a cooking pot on a
+      // stick rather than a weapon. Now a single continuously tapered
+      // wooden cudgel — thin at the grip, thick and slightly knotted at
+      // the business end — with grain lines along the shaft.
+      ctx.save();
       ctx.fillStyle = weapon.color;
       ctx.beginPath();
-      ctx.ellipse(28, 0, 11, 8, 0, 0, Math.PI * 2);
+      ctx.moveTo(-8, -2.4);
+      ctx.quadraticCurveTo(12, -4.2, 24, -8);
+      ctx.quadraticCurveTo(33, -10.5, 35, -4);
+      ctx.quadraticCurveTo(36.5, 0, 35, 4);
+      ctx.quadraticCurveTo(33, 10.5, 24, 8);
+      ctx.quadraticCurveTo(12, 4.2, -8, 2.4);
+      ctx.closePath();
       ctx.fill();
       ctx.strokeStyle = '#3a2414';
       ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(28, 0, 5, 0, Math.PI * 2);
       ctx.stroke();
+      // A couple of knots/grain marks so the head reads as wood.
+      ctx.strokeStyle = 'rgba(58,36,20,0.55)';
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(6, -1.4); ctx.lineTo(20, -3.2);
+      ctx.moveTo(8, 1.6); ctx.lineTo(22, 3.6);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(28, -1.5, 2.2, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+      break;
+    }
+    case 'toiletPaper': {
+      // A roll held on its side: the white paper cylinder seen end-on, the
+      // cardboard core, and the loose sheet already hanging off it (it
+      // flutters during the swing, which is where the wrap comes from).
+      ctx.save();
+      ctx.fillStyle = '#fdfdfd';
+      ctx.strokeStyle = '#b9b9b2';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.ellipse(16, 0, 12, 12, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      // Wound-paper layers, so it reads as a roll rather than a white ball.
+      ctx.strokeStyle = 'rgba(150,150,144,0.5)';
+      ctx.lineWidth = 0.8;
+      for (let r = 9; r >= 6; r -= 1.5) {
+        ctx.beginPath();
+        ctx.ellipse(16, 0, r, r, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#c8a165';
+      ctx.beginPath();
+      ctx.ellipse(16, 0, 4.2, 4.2, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // The loose sheet trailing off the roll.
+      const wave = Math.sin(f.animTimeMs / 90) * 3;
+      ctx.fillStyle = '#fbfbf8';
+      ctx.strokeStyle = '#cfcfc8';
+      ctx.beginPath();
+      ctx.moveTo(14, 11);
+      ctx.quadraticCurveTo(22 + wave, 20, 16 + wave, 32);
+      ctx.lineTo(24 + wave, 33);
+      ctx.quadraticCurveTo(30 + wave, 20, 22, 10);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
       break;
     }
     case 'spear': {
@@ -1126,28 +1225,164 @@ function drawCape(ctx: CanvasRenderingContext2D, f: Fighter, shoulderY: number, 
   // direct pose-driven kick rather than routed through the spring — it
   // needs to reliably read every time regardless of the body's velocity.
   const kick = pose.capeKick * 40;
-  const flare = kick;
 
   // Character-system overhaul: a player's cape is a cosmetic color choice
   // (see MEIN CHARAKTER / CAPE_COLORS) rather than one fixed red — enemies/
   // bosses with the plain 'cape'/'fancyCape' accessory keep their original
   // fixed colors untouched.
+  const fancy = f.accessories.includes('fancyCape');
   const capePlayerColors = f.kind === 'player' ? CAPE_COLORS[f.capeColorId] : null;
-  const primary = capePlayerColors?.primary ?? (f.accessories.includes('fancyCape') ? '#8e24aa' : '#c0392b');
-  const secondary = capePlayerColors?.secondary ?? (f.accessories.includes('fancyCape') ? '#6a1b9a' : '#8e2318');
+  const primary = capePlayerColors?.primary ?? (fancy ? '#8e24aa' : '#c0392b');
+  const secondary = capePlayerColors?.secondary ?? (fancy ? '#6a1b9a' : '#8e2318');
+
+  // Cape rework: this used to be a single closed path only 8px wide at the
+  // shoulders that tapered to a point — at the game's zoom it read as a
+  // coloured stroke down the character's back rather than a garment. It is
+  // now a real piece of cloth: a proper yoke across the shoulders, a hem
+  // nearly four times as wide, a travelling wave running down it so the
+  // whole sheet ripples instead of pivoting rigidly, a scalloped fluttering
+  // hem, shaded folds for volume, and a lit leading edge.
+  const t = f.animTimeMs / 1000;
+  const gust = windGust(performance.now() / 1000);
+  // Length is tuned so the hem (scallops included) hangs just above the
+  // shoes at rest rather than dragging through the grass.
+  const len = 58;
+  const topHalf = 10;
+  const botHalf = 20;
+  // How far the sheet trails behind the body: the spring's sway, the pose's
+  // own flare, and the shared scene-wide wind gust all push in the same
+  // direction, so the cape lifts when the character runs, jumps or farts
+  // AND on the same gusts the meadow grass leans to.
+  const drift = sway + kick * 0.5 + gust * 7;
+  const wavePhase = t * 4.2 + f.body.pos.x * 0.02;
+  const waveAmp = 2.2 + Math.abs(drift) * 0.16 + gust * 2.4;
+
+  // A point on one side edge of the cloth. k: 0 at the shoulders, 1 at the
+  // hem. side: +1 = leading (body-side) edge, -1 = trailing edge.
+  const edge = (k: number, side: 1 | -1) => {
+    const half = topHalf + (botHalf - topHalf) * k;
+    // Asymmetric: seen from the side the cloth hugs the near shoulder and
+    // billows out behind, so only a sliver shows past the body's leading
+    // edge while the bulk of the sheet trails. Without this the cape reads
+    // as being worn across the front.
+    const reach = side === 1 ? half * 0.42 : -half * 1.25;
+    // Trailing away from the body grows with k^1.5, so the cloth stays
+    // pinned at the shoulders and swings from the bottom.
+    const back = -3 - (4 + drift) * Math.pow(k, 1.5);
+    const ripple = Math.sin(wavePhase - k * 5.2) * waveAmp * k;
+    return {
+      x: back + ripple + reach,
+      y: shoulderY + 2 + len * k - kick * 0.55 * k,
+    };
+  };
 
   ctx.save();
-  ctx.fillStyle = primary;
+  const grad = ctx.createLinearGradient(0, shoulderY, 0, shoulderY + len);
+  grad.addColorStop(0, primary);
+  grad.addColorStop(1, secondary);
+  ctx.fillStyle = grad;
   ctx.strokeStyle = secondary;
-  ctx.lineWidth = 1;
+  ctx.lineWidth = 1.2;
+  ctx.lineJoin = 'round';
+
+  const ROWS = 9;
   ctx.beginPath();
-  ctx.moveTo(-4, shoulderY + 2);
-  ctx.lineTo(4, shoulderY + 2);
-  ctx.quadraticCurveTo(-10 - sway - flare, shoulderY + 30 - kick * 0.6, -14 - sway * 1.5 - flare, shoulderY + 62 - kick);
-  ctx.quadraticCurveTo(-2 - sway, shoulderY + 45, -4, shoulderY + 2);
+  const start = edge(0, 1);
+  ctx.moveTo(start.x, start.y);
+  for (let i = 1; i <= ROWS; i++) {
+    const p = edge(i / ROWS, 1);
+    ctx.lineTo(p.x, p.y);
+  }
+  // Scalloped hem: three lobes hanging between the two bottom corners,
+  // each dipping by its own amount and swinging on the same wave — the
+  // classic fluttering cloth edge instead of a straight cut.
+  const hemR = edge(1, 1);
+  const hemL = edge(1, -1);
+  const lobes = 3;
+  for (let i = 1; i <= lobes; i++) {
+    const a = (i - 1) / lobes;
+    const b = i / lobes;
+    const midX = hemR.x + (hemL.x - hemR.x) * ((a + b) / 2);
+    const midY = hemR.y + (hemL.y - hemR.y) * ((a + b) / 2);
+    const endX = hemR.x + (hemL.x - hemR.x) * b;
+    const endY = hemR.y + (hemL.y - hemR.y) * b;
+    const dip = 6 + Math.sin(wavePhase * 1.3 + i * 2.1) * 4;
+    ctx.quadraticCurveTo(midX, midY + dip, endX, endY);
+  }
+  for (let i = ROWS - 1; i >= 0; i--) {
+    const p = edge(i / ROWS, -1);
+    ctx.lineTo(p.x, p.y);
+  }
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
+
+  // Folds: two darker creases running the length of the cloth, offset
+  // across its width and riding the same wave, so the sheet reads as
+  // draped fabric with depth rather than a flat coloured shape.
+  ctx.strokeStyle = 'rgba(0,0,0,0.20)';
+  ctx.lineWidth = 2.4;
+  ctx.lineCap = 'round';
+  for (const across of [-0.42, 0.3]) {
+    ctx.beginPath();
+    for (let i = 0; i <= ROWS; i++) {
+      const k = i / ROWS;
+      const l = edge(k, -1);
+      const r = edge(k, 1);
+      const x = l.x + (r.x - l.x) * (0.5 + across / 2);
+      const y = l.y + (r.y - l.y) * 0.5;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // Lit leading edge — the side turned towards the viewer catches light,
+  // which is what stops the cape flattening into a silhouette.
+  ctx.strokeStyle = 'rgba(255,255,255,0.30)';
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  for (let i = 0; i <= ROWS; i++) {
+    const p = edge(i / ROWS, 1);
+    if (i === 0) ctx.moveTo(p.x, p.y);
+    else ctx.lineTo(p.x, p.y);
+  }
+  ctx.stroke();
+
+  // A gold trim along the hem marks out the "fancy" cape as the fancier
+  // one at a glance, rather than only by colour.
+  if (fancy) {
+    ctx.strokeStyle = '#ffd54f';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(hemR.x, hemR.y);
+    for (let i = 1; i <= lobes; i++) {
+      const a = (i - 1) / lobes;
+      const b = i / lobes;
+      const midX = hemR.x + (hemL.x - hemR.x) * ((a + b) / 2);
+      const midY = hemR.y + (hemL.y - hemR.y) * ((a + b) / 2);
+      const endX = hemR.x + (hemL.x - hemR.x) * b;
+      const endY = hemR.y + (hemL.y - hemR.y) * b;
+      const dip = 6 + Math.sin(wavePhase * 1.3 + i * 2.1) * 4;
+      ctx.quadraticCurveTo(midX, midY + dip, endX, endY);
+    }
+    ctx.stroke();
+  }
+
+  // The yoke: a solid collar band pinning the cloth across the shoulders,
+  // so it visibly hangs from something instead of sprouting out of the neck.
+  ctx.fillStyle = secondary;
+  ctx.beginPath();
+  ctx.moveTo(-topHalf - 1, shoulderY + 1);
+  ctx.quadraticCurveTo(0, shoulderY - 4, topHalf + 1, shoulderY + 1);
+  ctx.quadraticCurveTo(0, shoulderY + 8, -topHalf - 1, shoulderY + 1);
+  ctx.closePath();
+  ctx.fill();
+  // The clasp.
+  ctx.fillStyle = fancy ? '#ffd54f' : '#f5f5f5';
+  ctx.beginPath();
+  ctx.arc(0, shoulderY + 2, 2.4, 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
 }
 
@@ -1751,10 +1986,92 @@ export function drawSnowPile(ctx: CanvasRenderingContext2D, remainingMs: number,
   ctx.restore();
 }
 
+/** Toilet-paper wrap. Drawn as a stack of individual bands spiralling up
+ * the body — each one a separate visible strip with its own slight tilt and
+ * a shaded underside, so you can actually count the layers rather than see
+ * one white block. The wrap spools ON over the first ~320ms (bands appear
+ * bottom-to-top, the way it was actually thrown), holds while the target
+ * struggles, then tears open over the last ~350ms: the bands split apart at
+ * the middle and their loose ends flap outwards. */
+export function drawToiletPaperWrap(
+  ctx: CanvasRenderingContext2D,
+  remainingMs: number,
+  totalMs: number,
+  shoulderY: number,
+  hipY: number,
+  halfWidth: number,
+  t: number,
+): void {
+  const total = Math.max(1, totalMs);
+  const elapsed = total - remainingMs;
+  const spoolOn = Math.max(0, Math.min(1, elapsed / 320));
+  const tearOpen = Math.max(0, Math.min(1, (350 - remainingMs) / 350));
+
+  const top = shoulderY + 4;
+  const bottom = hipY + 34;
+  const bandCount = 9;
+  const bandH = (bottom - top) / bandCount;
+
+  ctx.save();
+  ctx.lineJoin = 'round';
+  for (let i = 0; i < bandCount; i++) {
+    // Bands land bottom-up as the roll is thrown around the target.
+    const arrival = 1 - i / bandCount;
+    if (spoolOn < arrival * 0.92) continue;
+
+    const y = top + i * bandH;
+    // Each band is its own strip: a small alternating tilt reads as paper
+    // spiralling around the body rather than flat stacked rectangles.
+    const tilt = Math.sin(i * 1.7) * 0.09;
+    const w = halfWidth * (1 + Math.sin(i * 2.3) * 0.07);
+    const gap = tearOpen * (6 + i * 1.6);
+    const flap = Math.sin(t * 9 + i) * tearOpen * 5;
+
+    ctx.save();
+    ctx.translate(0, y + bandH / 2);
+    ctx.rotate(tilt);
+    // Left half of the band, sliding out as the wrap tears.
+    ctx.fillStyle = i % 2 === 0 ? '#fdfdfd' : '#f1f1ee';
+    ctx.strokeStyle = 'rgba(120,120,115,0.55)';
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.rect(-w - gap, -bandH * 0.42, w + flap * 0.5, bandH * 0.84);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.rect(gap - flap * 0.5, -bandH * 0.42, w + flap * 0.5, bandH * 0.84);
+    ctx.fill();
+    ctx.stroke();
+    // Shaded underside so the strip reads as wrapping around a body.
+    ctx.fillStyle = 'rgba(0,0,0,0.10)';
+    ctx.fillRect(-w - gap, bandH * 0.22, (w + flap * 0.5) * 2 + gap * 2, bandH * 0.2);
+    ctx.restore();
+  }
+
+  // The loose tail end of the roll, still trailing off the last band and
+  // fluttering — the giveaway that this is paper and not a bandage.
+  if (spoolOn > 0.85 && tearOpen < 0.9) {
+    const tailY = top + bandH * 1.2;
+    ctx.strokeStyle = '#fbfbf8';
+    ctx.lineWidth = bandH * 0.6;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(halfWidth * 0.9, tailY);
+    ctx.quadraticCurveTo(
+      halfWidth * 1.5 + Math.sin(t * 6) * 4, tailY + 8,
+      halfWidth * 1.9 + Math.sin(t * 6 + 1) * 7, tailY + 20 + Math.sin(t * 4) * 4,
+    );
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawStatusOverlay(ctx: CanvasRenderingContext2D, f: Fighter, shoulderY: number, hipY: number): void {
   const s = f.status;
   const t = f.animTimeMs / 1000;
-  if (f.dazedUntilMs > 0) {
+  if (f.wrappedUntilMs > 0) {
+    drawToiletPaperWrap(ctx, f.wrappedUntilMs, f.wrappedTotalMs, shoulderY, hipY, 13, t);
+  } else if (f.dazedUntilMs > 0) {
     drawCirclingBirds(ctx, f, shoulderY);
   } else if (s.frozenUntilMs > 0) {
     drawSnowPile(ctx, s.frozenUntilMs, shoulderY, hipY, t);

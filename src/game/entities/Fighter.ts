@@ -14,6 +14,14 @@ export interface StatusEffects {
   dotColor: string;
 }
 
+// Banana pratfall beat lengths (ms). Deliberately generous: the brief asks
+// for the enemy to slip, actually fall over, and then be briefly confused
+// and unable to act — a beat the player can see and punish, not a flicker.
+const SLIP_FALL_MS = 950;
+const SLIP_GETUP_MS = 600;
+const SLIP_DIZZY_MS = 1450;
+const SLIP_TOTAL_MS = SLIP_FALL_MS + SLIP_GETUP_MS + SLIP_DIZZY_MS;
+
 export function freshStatus(): StatusEffects {
   return { slowMult: 1, slowUntilMs: 0, stunnedUntilMs: 0, frozenUntilMs: 0, dotPerSec: 0, dotUntilMs: 0, dotColor: '#7cb342' };
 }
@@ -66,6 +74,23 @@ export class Fighter {
   // Blocks canAct() via hitstunRemainingMs, but is tracked separately so the
   // renderers know to draw the slip pose + birds rather than a plain stagger.
   dazedUntilMs = 0;
+  // Banana pratfall sequencer. The old version was a single flat 'dazed'
+  // pose for 1.1s, which read as a light stagger and was over before the
+  // player could punish it. This drives a real three-beat cartoon fall —
+  // skid along the ground, climb back up, then stand there dizzy with the
+  // birds circling — see SLIP_* below and GameEngine's 'banana' hazard.
+  slipSequenceMs = 0;
+  // Toilet-paper wrap. The target is spun up in paper and completely unable
+  // to act until it tears its way out; wrappedTotalMs is kept so the
+  // renderers can drive the wrap-on / struggle / tear-free beats, and
+  // wrapImmuneUntilMs stops the weapon from chaining wraps back-to-back
+  // into a permanent lock.
+  wrappedUntilMs = 0;
+  wrappedTotalMs = 0;
+  wrapImmuneUntilMs = 0;
+  /** Set for one frame when a wrap expires, so the engine can play the
+   * tear-free burst exactly once. Consumed by GameEngine. */
+  wrapBreakPending = false;
   // One-time bonus weapon: stork drops a diaper bomb on a chosen target.
   hasStorkBonusWeapon = false;
   // Persistent-progression pass: the single held shop-bought special
@@ -131,13 +156,18 @@ export class Fighter {
     return this.status.slowUntilMs > 0;
   }
 
+  get isWrapped(): boolean {
+    return this.wrappedUntilMs > 0;
+  }
+
   canAct(): boolean {
     return (
       !this.isDead &&
       this.hitstunRemainingMs <= 0 &&
       !this.knockedDown &&
       !this.isFrozen &&
-      !this.isStunned
+      !this.isStunned &&
+      !this.isWrapped
     );
   }
 
@@ -157,6 +187,17 @@ export class Fighter {
     if (this.vomitTimerMs > 0) this.vomitTimerMs -= dtMs;
     if (this.bananaCooldownMs > 0) this.bananaCooldownMs -= dtMs;
     if (this.dazedUntilMs > 0) this.dazedUntilMs -= dtMs;
+    this.tickSlipSequence(dtMs);
+    if (this.wrapImmuneUntilMs > 0) this.wrapImmuneUntilMs -= dtMs;
+    if (this.wrappedUntilMs > 0) {
+      this.wrappedUntilMs -= dtMs;
+      if (this.wrappedUntilMs <= 0) {
+        this.wrappedUntilMs = 0;
+        this.wrappedTotalMs = 0;
+        this.wrapBreakPending = true;
+        if (this.anim === 'wrapped') this.setAnim('idle', true);
+      }
+    }
 
     if (this.status.slowUntilMs > 0) {
       this.status.slowUntilMs -= dtMs;
@@ -175,6 +216,52 @@ export class Fighter {
   applySlow(mult: number, durationMs: number): void {
     this.status.slowMult = Math.min(this.status.slowMult, mult);
     this.status.slowUntilMs = Math.max(this.status.slowUntilMs, durationMs);
+  }
+
+  /** Starts the banana pratfall: the fighter is out of the fight for the
+   * whole sequence (hitstun covers it), lying flat on the ground first,
+   * then getting back up, then standing dizzy with circling birds. */
+  startSlip(): void {
+    this.slipSequenceMs = SLIP_TOTAL_MS;
+    this.hitstunRemainingMs = Math.max(this.hitstunRemainingMs, SLIP_TOTAL_MS);
+    this.dazedUntilMs = 0; // the birds only join once the fighter is upright again
+    this.setAnim('fallen', true);
+  }
+
+  /** Advances the pratfall and swaps the pose on each beat boundary. Forced
+   * setAnim calls only ever happen on an actual transition, so each pose
+   * plays from its own t=0 and none of them restart every frame. */
+  private tickSlipSequence(dtMs: number): void {
+    if (this.slipSequenceMs <= 0) return;
+    this.slipSequenceMs -= dtMs;
+    if (this.slipSequenceMs <= 0) {
+      this.slipSequenceMs = 0;
+      this.dazedUntilMs = 0;
+      this.setAnim('idle', true);
+      return;
+    }
+    const elapsed = SLIP_TOTAL_MS - this.slipSequenceMs;
+    const next: AnimState = elapsed < SLIP_FALL_MS
+      ? 'fallen'
+      : elapsed < SLIP_FALL_MS + SLIP_GETUP_MS ? 'gettingUp' : 'dazed';
+    if (this.anim !== next) this.setAnim(next, true);
+    // Birds circle the head only while the fighter is actually standing —
+    // during the flattened beats the whole rig is drawn rotated on its
+    // side, and the overlay would rotate along with it.
+    this.dazedUntilMs = next === 'dazed' ? this.slipSequenceMs : 0;
+  }
+
+  /** Spins this fighter up in toilet paper for `durationMs`. No-op while it
+   * is still wrap-immune from the last one, so the weapon can open a window
+   * but never chain into a permanent lock. */
+  applyWrap(durationMs: number): boolean {
+    if (this.isDead || this.wrappedUntilMs > 0 || this.wrapImmuneUntilMs > 0) return false;
+    this.wrappedUntilMs = durationMs;
+    this.wrappedTotalMs = durationMs;
+    this.wrapImmuneUntilMs = durationMs + 3000;
+    this.body.vel.x = 0;
+    this.setAnim('wrapped', true);
+    return true;
   }
 
   applyStun(durationMs: number): void {
