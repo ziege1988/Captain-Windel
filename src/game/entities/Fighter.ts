@@ -91,6 +91,14 @@ export class Fighter {
   /** Set for one frame when a wrap expires, so the engine can play the
    * tear-free burst exactly once. Consumed by GameEngine. */
   wrapBreakPending = false;
+  /** Throttles how often the AI will hop up onto the raised platform, so
+   * chasing the player upstairs is a beat rather than a reflex. */
+  platformJumpCooldownMs = 0;
+  /** Which way the AI committed to walking off the platform. Held until it
+   * is actually off, because re-deciding every frame from the player's
+   * relative position makes the enemy jitter in place when the player is
+   * standing directly underneath it. */
+  platformExitDir: -1 | 0 | 1 = 0;
   // One-time bonus weapon: stork drops a diaper bomb on a chosen target.
   hasStorkBonusWeapon = false;
   // Persistent-progression pass: the single held shop-bought special
@@ -189,6 +197,7 @@ export class Fighter {
     if (this.dazedUntilMs > 0) this.dazedUntilMs -= dtMs;
     this.tickSlipSequence(dtMs);
     if (this.wrapImmuneUntilMs > 0) this.wrapImmuneUntilMs -= dtMs;
+    if (this.platformJumpCooldownMs > 0) this.platformJumpCooldownMs -= dtMs;
     if (this.wrappedUntilMs > 0) {
       this.wrappedUntilMs -= dtMs;
       if (this.wrappedUntilMs <= 0) {

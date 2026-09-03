@@ -1,4 +1,5 @@
 import type { Fighter } from '../entities/Fighter';
+import { floorY } from '../physics/physics';
 import { drawWeaponInHand, drawSnowPile, drawToiletPaperWrap } from './renderFighter';
 
 // Section (boss overhaul): bosses used to be rendered through the exact
@@ -1242,7 +1243,10 @@ export function renderBoss(ctx: CanvasRenderingContext2D, f: Fighter, dtSec = 0)
   const pose = smoothPose(f, target, dtSec);
   const scale = f.scale;
   const x = f.body.pos.x;
-  const groundY = f.body.groundY;
+  // Use the effective floor, not the arena floor: on a raised platform the
+  // whole rig (ground anchoring, air-lift, the flattened death path) must
+  // key off the surface actually being stood on.
+  const groundY = floorY(f.body);
   const airLift = groundY - f.body.pos.y;
   const groundEmbed = f.body.grounded ? flattenGroundEmbed(f, pose) * scale : 0;
 

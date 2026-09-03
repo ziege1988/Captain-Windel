@@ -1,4 +1,5 @@
 import type { Fighter } from '../entities/Fighter';
+import { floorY } from '../physics/physics';
 import { WEAPONS } from '../../data/weapons';
 import { CAPE_COLORS, CHARACTERS } from '../../data/characters';
 import type { CharacterDef } from '../types';
@@ -751,7 +752,10 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   const pose = smoothPose(f, target, dtSec);
   const scale = f.scale;
   const x = f.body.pos.x;
-  const groundY = f.body.groundY;
+  // Use the effective floor, not the arena floor: on a raised platform the
+  // whole rig (ground anchoring, air-lift, the flattened death path) must
+  // key off the surface actually being stood on.
+  const groundY = floorY(f.body);
   const airLift = groundY - f.body.pos.y;
   const groundEmbed = f.body.grounded ? flattenGroundEmbed(f, pose) * scale : 0;
 
@@ -1247,7 +1251,10 @@ function drawCape(ctx: CanvasRenderingContext2D, f: Fighter, shoulderY: number, 
   // Length is tuned so the hem (scallops included) hangs just above the
   // shoes at rest rather than dragging through the grass.
   const len = 58;
-  const topHalf = 10;
+  // Narrow at the throat, widening quickly over the shoulders: a cape that
+  // is as wide at the neck as it is at the collarbone reads as a bib rather
+  // than something fastened around someone's neck.
+  const neckHalf = 4.5;
   const botHalf = 20;
   // How far the sheet trails behind the body: the spring's sway, the pose's
   // own flare, and the shared scene-wide wind gust all push in the same
@@ -1260,7 +1267,9 @@ function drawCape(ctx: CanvasRenderingContext2D, f: Fighter, shoulderY: number, 
   // A point on one side edge of the cloth. k: 0 at the shoulders, 1 at the
   // hem. side: +1 = leading (body-side) edge, -1 = trailing edge.
   const edge = (k: number, side: 1 | -1) => {
-    const half = topHalf + (botHalf - topHalf) * k;
+    // pow(k, 0.55) flares the cloth out fast just below the collar and then
+    // widens gently, instead of a straight taper from a too-wide neck.
+    const half = neckHalf + (botHalf - neckHalf) * Math.pow(k, 0.55);
     // Asymmetric: seen from the side the cloth hugs the near shoulder and
     // billows out behind, so only a sliver shows past the body's leading
     // edge while the bulk of the sheet trails. Without this the cape reads
@@ -1373,15 +1382,15 @@ function drawCape(ctx: CanvasRenderingContext2D, f: Fighter, shoulderY: number, 
   // so it visibly hangs from something instead of sprouting out of the neck.
   ctx.fillStyle = secondary;
   ctx.beginPath();
-  ctx.moveTo(-topHalf - 1, shoulderY + 1);
-  ctx.quadraticCurveTo(0, shoulderY - 4, topHalf + 1, shoulderY + 1);
-  ctx.quadraticCurveTo(0, shoulderY + 8, -topHalf - 1, shoulderY + 1);
+  ctx.moveTo(-neckHalf - 1.5, shoulderY + 1);
+  ctx.quadraticCurveTo(-1, shoulderY - 4.5, neckHalf + 1.5, shoulderY + 1);
+  ctx.quadraticCurveTo(-1, shoulderY + 5, -neckHalf - 1.5, shoulderY + 1);
   ctx.closePath();
   ctx.fill();
-  // The clasp.
+  // The clasp, sitting in the hollow of the throat.
   ctx.fillStyle = fancy ? '#ffd54f' : '#f5f5f5';
   ctx.beginPath();
-  ctx.arc(0, shoulderY + 2, 2.4, 0, Math.PI * 2);
+  ctx.arc(-0.5, shoulderY + 0.5, 1.9, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }

@@ -19,7 +19,10 @@ export type SoundId =
   | 'slip' | 'bodyThud'
   // Klopapier weapon: the roll spinning out, and the paper ripping open
   // again when the target tears free.
-  | 'paperWrap' | 'paperTear';
+  | 'paperWrap' | 'paperTear'
+  // Thunderstorm weather: the distant roll that warns a bolt is coming, and
+  // the crack when it actually lands.
+  | 'thunderRumble' | 'thunderCrack';
 
 interface SoundSpec {
   wave: OscillatorType | 'noise';
@@ -104,6 +107,8 @@ const SOUND_SPECS: Record<SoundId, SoundSpec> = {
   bodyThud: { wave: 'noise', freqStart: 190, freqEnd: 55, durationMs: 210, volume: 0.42, attackMs: 2, punch: true },
   paperWrap: { wave: 'noise', freqStart: 1500, freqEnd: 2400, durationMs: 340, volume: 0.24, attackMs: 12 },
   paperTear: { wave: 'noise', freqStart: 2600, freqEnd: 900, durationMs: 260, volume: 0.3, attackMs: 3 },
+  thunderRumble: { wave: 'noise', freqStart: 110, freqEnd: 45, durationMs: 900, volume: 0.3, attackMs: 120 },
+  thunderCrack: { wave: 'noise', freqStart: 900, freqEnd: 40, durationMs: 620, volume: 0.6, attackMs: 2, punch: true },
 };
 
 // Section 4/5/7 (polish pass): several distinct fart "personalities" —

@@ -13,11 +13,12 @@ import type { SaveData } from '../../storage/saveData';
 import { useAppStore } from '../../state/appStore';
 import { decideAiAction } from '../ai/aiTypes';
 import { tickBossAbilities } from '../ai/bossBehavior';
-import { applyKnockback, distance, stepPhysics } from '../physics/physics';
+import { applyKnockback, distance, stepPhysics, floorY, type Platform } from '../physics/physics';
 import { ParticleSystem } from '../effects/particles';
 import { HitStop, ScreenShake } from '../effects/screenEffects';
 import { audio, type SoundId } from '../audio/audioManager';
 import { renderArena, type ArenaLayout } from './renderArena';
+import { pickRandomWeather, type WeatherState, type WeatherId } from './weather';
 import { renderFighter } from './renderFighter';
 import { renderBoss } from './renderBoss';
 import { applyDefense, resolveHit, scoreForHit } from './combatMath';
@@ -267,6 +268,37 @@ const GROUND_FRACTION = 0.64;
 // more ground/landscape/movement room visible, characters read a bit
 // smaller as a direct, intended consequence (never compensated for here).
 const ARENA_ZOOM = 0.62;
+// The arena is twice as wide as one screenful of world. Everything that
+// used to be true of the whole arena (fighters spawn at the far ends, the
+// meadow/trees/weather fill it, hazards live in it) still is — there is
+// simply twice as much of it, which is why a camera exists at all now: the
+// old design fit the entire arena on screen with no camera, and doubling
+// the width could only be paid for either by halving the on-screen size of
+// everything or by scrolling. Scrolling keeps the characters readable.
+const ARENA_WIDTH_MULT = 2;
+// How quickly the camera catches up to where it wants to be (per second,
+// exponential). Slow enough that it never snaps, fast enough that a running
+// fighter is never left at the edge of the frame.
+const CAMERA_FOLLOW_PER_SEC = 4.5;
+// Mario-style upper level: two jump-through ledges hanging over the arena
+// floor that either fighter can hop onto and fight on. The height is set
+// against the jump arc below (apex = jumpVel^2 / 2g), with real headroom to
+// spare so landing on one is comfortable rather than pixel-perfect.
+const PLATFORM_HEIGHT_ABOVE_GROUND = 145;
+const PLATFORM_WIDTH_FRACTION = 0.17; // of the whole arena width
+const JUMP_VELOCITY = -900;
+
+/** The two upper-level ledges, placed left-of-centre and right-of-centre so
+ * neither sits directly over a spawn point and both are reachable from the
+ * open ground beside them. */
+function buildPlatforms(worldWidth: number, groundY: number): Platform[] {
+  const width = worldWidth * PLATFORM_WIDTH_FRACTION;
+  const y = groundY - PLATFORM_HEIGHT_ABOVE_GROUND;
+  return [
+    { x: worldWidth * 0.14, width, y },
+    { x: worldWidth * 0.69, width, y },
+  ];
+}
 
 export class GameEngine {
   private ctx: CanvasRenderingContext2D;
@@ -275,10 +307,16 @@ export class GameEngine {
   private lastTime = 0;
   private accumStartTime = performance.now();
 
+  /** Width of the world slice actually on screen (world units). */
+  private viewWidth = FALLBACK_WIDTH / ARENA_ZOOM;
+  /** Left edge of the camera window, in world coordinates. */
+  private cameraX = 0;
+
   private layout: ArenaLayout = {
-    width: FALLBACK_WIDTH, height: FALLBACK_HEIGHT,
+    width: FALLBACK_WIDTH * ARENA_WIDTH_MULT, height: FALLBACK_HEIGHT,
     groundY: FALLBACK_HEIGHT * GROUND_FRACTION,
-    minX: ARENA_SIDE_PADDING, maxX: FALLBACK_WIDTH - ARENA_SIDE_PADDING,
+    minX: ARENA_SIDE_PADDING, maxX: FALLBACK_WIDTH * ARENA_WIDTH_MULT - ARENA_SIDE_PADDING,
+    platforms: buildPlatforms(FALLBACK_WIDTH * ARENA_WIDTH_MULT, FALLBACK_HEIGHT * GROUND_FRACTION),
   };
 
   player: Fighter;
@@ -287,6 +325,17 @@ export class GameEngine {
   isBossLevel = false;
   bossDefId: string | null = null;
   arenaId = 'meadow';
+  // Weather is rolled fresh for every level, so the same arena looks and
+  // behaves differently each time it comes round: sun, overcast, rain, a
+  // gusty autumn day, or a thunderstorm whose bolts can actually land on
+  // whoever is standing in the wrong place.
+  weather: WeatherState = pickRandomWeather();
+  // An actual bolt coming down at a specific spot in the arena, with a
+  // telegraph beat first so being hit is always a mistake the player could
+  // have avoided rather than an unannounced tax. Only ever exists during
+  // weather that has lightning.
+  private lightningStrike: { x: number; warnMs: number; boltMs: number; struck: boolean } | null = null;
+  private lightningCooldownMs = 5000;
 
   phase: GamePhase = 'ready';
   private phaseBeforePause: GamePhase = 'ready';
@@ -420,20 +469,35 @@ export class GameEngine {
     this.canvas.style.height = `${cssHeight}px`;
     this.ctx.setTransform(dpr * ARENA_ZOOM, 0, 0, dpr * ARENA_ZOOM, 0, 0);
 
-    const worldWidth = cssWidth / ARENA_ZOOM;
+    // The visible slice of world is one screenful; the arena itself is
+    // ARENA_WIDTH_MULT times that, and the camera pans across it.
+    const viewWidth = cssWidth / ARENA_ZOOM;
     const worldHeight = cssHeight / ARENA_ZOOM;
+    const worldWidth = viewWidth * ARENA_WIDTH_MULT;
+    this.viewWidth = viewWidth;
     this.layout = {
       width: worldWidth,
       height: worldHeight,
       groundY: worldHeight * GROUND_FRACTION,
       minX: ARENA_SIDE_PADDING,
       maxX: worldWidth - ARENA_SIDE_PADDING,
+      viewWidth,
+      cameraX: this.cameraX,
+      platforms: buildPlatforms(worldWidth, worldHeight * GROUND_FRACTION),
     };
+    this.cameraX = this.clampCamera(this.desiredCameraX());
 
     for (const f of [this.player, this.enemy]) {
       if (!f) continue;
       f.body.groundY = this.layout.groundY;
-      if (f.body.grounded) f.body.pos.y = this.layout.groundY;
+      // A fighter standing on a platform must stay on it across a resize —
+      // the platforms move with the layout, so re-seat onto the rebuilt one
+      // rather than dropping the fighter to the arena floor.
+      if (f.body.platformY != null) {
+        const p = (this.layout.platforms ?? []).find((pl) => f.body.pos.x >= pl.x && f.body.pos.x <= pl.x + pl.width);
+        f.body.platformY = p ? p.y : null;
+      }
+      if (f.body.grounded) f.body.pos.y = floorY(f.body);
       f.body.pos.x = Math.min(this.layout.maxX - 20, Math.max(this.layout.minX + 20, f.body.pos.x));
     }
   }
@@ -491,16 +555,22 @@ export class GameEngine {
     // Section 1: start with clear daylight between the two fighters rather
     // than nearly toe-to-toe, so the opening seconds actually feel like a
     // stand-off instead of an ambush.
+    // Arena-doubling pass: the arena is now twice as wide as the visible
+    // window, so spawning at a fraction of its FULL width would put the two
+    // fighters more than a screen apart with nothing on screen. They start
+    // centred in the arena, a little over half a screen apart — the same
+    // stand-off as before, with the extra ground to either side of them.
     const innerWidth = this.layout.maxX - this.layout.minX;
-    const startMargin = innerWidth * 0.15;
+    const startGap = Math.min(innerWidth * 0.5, this.viewWidth * 0.55);
+    const centerX = (this.layout.minX + this.layout.maxX) / 2;
 
-    this.player.body.pos.x = this.layout.minX + startMargin;
+    this.player.body.pos.x = centerX - startGap / 2;
     this.player.body.pos.y = this.layout.groundY;
     this.player.body.vel = { x: 0, y: 0 };
     this.player.facing = 1;
     this.player.setAnim('idle', true);
 
-    const enemyX = this.layout.maxX - startMargin;
+    const enemyX = centerX + startGap / 2;
     if (level.isBoss && level.bossId) {
       const def = BOSSES[level.bossId];
       this.enemy = createBoss(def, enemyX, this.layout.groundY, level.difficultyScale, level.sizeScale);
@@ -518,6 +588,12 @@ export class GameEngine {
       this.showToast('BEREIT?', this.readyTimerMs);
     }
     this.enemy.facing = -1;
+    this.cameraX = this.clampCamera(this.desiredCameraX());
+
+    const previousWeather: WeatherId = this.weather.id;
+    this.weather = pickRandomWeather(previousWeather);
+    this.lightningStrike = null;
+    this.lightningCooldownMs = 3000 + Math.random() * 4000;
 
     // Section 6/7/8: how eager, how telegraphed and how quick-to-recover
     // this level's enemy/boss is — tapers up over the campaign instead of
@@ -595,7 +671,7 @@ export class GameEngine {
   jump(): void {
     if (this.phase !== 'playing' && this.phase !== 'ready') return;
     if (!this.player.canAct() || !this.player.body.grounded) return;
-    this.player.body.vel.y = -820;
+    this.player.body.vel.y = JUMP_VELOCITY;
     this.player.body.grounded = false;
     this.player.setAnim('jump', true);
     audio.play('jump');
@@ -664,7 +740,7 @@ export class GameEngine {
     audio.play('weaponSwing');
     const dir = this.player.facing;
     const throwX = this.player.body.pos.x;
-    const throwY = this.player.body.groundY - 50;
+    const throwY = floorY(this.player.body) - 50;
     window.setTimeout(() => {
       if (this.phase !== 'playing' && this.phase !== 'levelWon') return;
       hazardCounter += 1;
@@ -1029,7 +1105,7 @@ export class GameEngine {
   private spawnMosquito(): void {
     const targetKind: 'player' | 'enemy' = this.enemy && !this.enemy.isDead && Math.random() < 0.5 ? 'enemy' : 'player';
     this.mosquito = {
-      x: this.layout.minX + Math.random() * (this.layout.maxX - this.layout.minX),
+      x: this.viewMinX() + Math.random() * (this.viewMaxX() - this.viewMinX()),
       y: this.layout.groundY - 260 - Math.random() * 50,
       targetKind,
       phase: 'flying',
@@ -1278,14 +1354,14 @@ export class GameEngine {
     const p = Math.min(1, flight.elapsedMs / flight.totalMs);
     const margin = 70;
     if (flight.variant === 'crossFly') {
-      const startX = flight.dir > 0 ? this.layout.minX - margin : this.layout.maxX + margin;
-      const endX = flight.dir > 0 ? this.layout.maxX + margin : this.layout.minX - margin;
+      const startX = flight.dir > 0 ? this.viewMinX() - margin : this.viewMaxX() + margin;
+      const endX = flight.dir > 0 ? this.viewMaxX() + margin : this.viewMinX() - margin;
       return {
         x: lerp(startX, endX, p),
         y: flight.flightY + Math.sin(p * Math.PI * 2) * 10,
       };
     }
-    const entryX = flight.dir > 0 ? this.layout.minX - margin : this.layout.maxX + margin;
+    const entryX = flight.dir > 0 ? this.viewMinX() - margin : this.viewMaxX() + margin;
     const inEnd = 0.22;
     const outStart = 0.78;
     if (p < inEnd) {
@@ -1335,10 +1411,10 @@ export class GameEngine {
     if (!this.enemy || this.enemy.isDead) return;
     const enemy = this.enemy;
     audio.play('surprise');
-    this.particles.burst({ x: enemy.body.pos.x, y: enemy.body.groundY - 95 }, 12, {
+    this.particles.burst({ x: enemy.body.pos.x, y: floorY(enemy.body) - 95 }, 12, {
       color: '#ffffff', shape: 'circle', size: 4, life: 0.5, maxLife: 0.5, gravity: -30,
     });
-    this.spawnComicText('?!', enemy.body.pos.x, enemy.body.groundY - 140, '#fff59d');
+    this.spawnComicText('?!', enemy.body.pos.x, floorY(enemy.body) - 140, '#fff59d');
     enemy.setAnim('surprised', true);
     // Short tactical distraction, not a stun-lock — matches the same scale
     // as a heavy hit's stagger window, never longer.
@@ -1407,7 +1483,7 @@ export class GameEngine {
     this.fireSuperpowerVisual(
       id,
       this.player.body.pos.x + this.player.facing * 30,
-      this.player.body.groundY - 26 * this.player.scale,
+      floorY(this.player.body) - 26 * this.player.scale,
       dirAngle,
     );
 
@@ -1429,7 +1505,7 @@ export class GameEngine {
         this.enemy.setAnim('hit', true);
         this.enemy.hitstunRemainingMs = Math.max(this.enemy.hitstunRemainingMs, 260);
         applyKnockback(this.enemy.body, this.player.facing, 60, 0.3);
-        this.spawnComicText('Pfui!', this.enemy.body.pos.x, this.enemy.body.groundY - 130, '#aed581');
+        this.spawnComicText('Pfui!', this.enemy.body.pos.x, floorY(this.enemy.body) - 130, '#aed581');
         break;
       case 'chili':
         this.enemy.applyDot(6, def.effectDurationMs, '#ff5722');
@@ -1442,7 +1518,7 @@ export class GameEngine {
         // Sized to match the now much bigger flame jet in
         // fireSuperpowerVisual — the enemy should look genuinely wrapped
         // in fire for a moment, not dotted with a few tiny embers.
-        this.particles.burst({ x: this.enemy.body.pos.x, y: this.enemy.body.groundY - 40 * this.enemy.scale }, 10, {
+        this.particles.burst({ x: this.enemy.body.pos.x, y: floorY(this.enemy.body) - 40 * this.enemy.scale }, 10, {
           color: '#ff7043', shape: 'flame', size: 42, life: 0.5, maxLife: 0.5, gravity: -60,
         });
         break;
@@ -1452,7 +1528,7 @@ export class GameEngine {
         this.enemy.hitstunRemainingMs = Math.max(this.enemy.hitstunRemainingMs, 260);
         // A visible little burst of ice crystals right on the enemy so the
         // freeze reads as an actual ice impact, not just a status tint.
-        this.particles.burst({ x: this.enemy.body.pos.x, y: this.enemy.body.groundY - 40 * this.enemy.scale }, 8, {
+        this.particles.burst({ x: this.enemy.body.pos.x, y: floorY(this.enemy.body) - 40 * this.enemy.scale }, 8, {
           color: '#b3e5fc', shape: 'shard', size: 6, life: 0.4, maxLife: 0.4, gravity: 30, rotSpeed: 4,
         });
         break;
@@ -1601,6 +1677,7 @@ export class GameEngine {
       if (this.toastTimerMs <= 0) this.toastMessage = null;
     }
 
+    this.updateCamera(dtSec);
     this.render(dtSec);
     this.emitHud(rawDtMs);
   }
@@ -1631,14 +1708,14 @@ export class GameEngine {
     if (!player.body.grounded && player.canAct()) {
       player.setAnim(player.body.vel.y < 0 ? 'jump' : 'fall');
     }
-    stepPhysics(player.body, dtSec, this.layout.minX, this.layout.maxX);
+    stepPhysics(player.body, dtSec, this.layout.minX, this.layout.maxX, this.layout.platforms);
     if (player.body.grounded && player.body.vel.y === 0 && (player.anim === 'jump' || player.anim === 'fall')) {
       player.setAnim('idle');
     }
 
     if (enemy) {
       enemy.facing = player.body.pos.x >= enemy.body.pos.x ? 1 : -1;
-      stepPhysics(enemy.body, dtSec, this.layout.minX, this.layout.maxX);
+      stepPhysics(enemy.body, dtSec, this.layout.minX, this.layout.maxX, this.layout.platforms);
     }
 
     if (this.readyTimerMs <= 0) {
@@ -1697,7 +1774,7 @@ export class GameEngine {
       player.facing = enemy.body.pos.x >= player.body.pos.x ? 1 : -1;
     }
 
-    stepPhysics(player.body, dtSec, this.layout.minX, this.layout.maxX);
+    stepPhysics(player.body, dtSec, this.layout.minX, this.layout.maxX, this.layout.platforms);
     if (player.body.grounded && player.body.vel.y === 0 && (player.anim === 'jump' || player.anim === 'fall')) {
       player.setAnim('idle');
       audio.play('land');
@@ -1709,7 +1786,7 @@ export class GameEngine {
     if (enemy) {
       const tornadoCarried = this.tornadoCarry?.target === enemy;
       if (!enemy.isDead && !tornadoCarried) this.updateEnemyAi(enemy, dtMs, dtSec);
-      stepPhysics(enemy.body, dtSec, this.layout.minX, this.layout.maxX);
+      stepPhysics(enemy.body, dtSec, this.layout.minX, this.layout.maxX, this.layout.platforms);
       if (tornadoCarried) this.updateTornadoCarry(dtMs);
       this.updateDeathSequence(enemy, dtMs);
     }
@@ -1722,6 +1799,7 @@ export class GameEngine {
     this.updateHazards(dtSec);
     this.updateTornadoEffect(dtMs);
     this.updatePaperThrow(dtMs);
+    this.updateLightning(dtMs);
     this.consumeWrapBreak(player);
     if (enemy) this.consumeWrapBreak(enemy);
     this.updateMosquitoSpawn(dtMs);
@@ -1767,6 +1845,10 @@ export class GameEngine {
     // canAct()) matters because the movement/pose block further down
     // rewrites enemy.anim every single frame, which would overwrite the
     // fall/get-up/dizzy poses the moment they were set.
+    if (this.updateEnemyPlatformNavigation(enemy, dtMs)) {
+      void dtSec;
+      return;
+    }
     if (enemy.slipSequenceMs > 0 || enemy.wrappedUntilMs > 0) {
       enemy.body.vel.x *= 0.9;
       enemy.isBlocking = false;
@@ -1879,6 +1961,93 @@ export class GameEngine {
     if (decision.wantsBlock) enemy.setAnim('block');
     if (decision.wantsAttack) this.startAttack(enemy, decision.wantsKick);
     void dtSec;
+  }
+
+  /** Mario-level chasing: the horizontal AI already walks the enemy towards
+   * the player, which is enough to get it underneath a platform and enough
+   * to walk it back off one — but nothing in it ever jumps. This adds the
+   * one missing beat: standing under the ledge the player is fighting from,
+   * hop up onto it. Deliberately not instant (a short reaction delay, and a
+   * cooldown between attempts) so retreating upstairs still buys the player
+   * a moment rather than being pointless. */
+  private updateEnemyPlatformNavigation(enemy: Fighter, dtMs: number): boolean {
+    if (enemy.platformJumpCooldownMs > 0) enemy.platformJumpCooldownMs -= dtMs;
+    const platforms = this.layout.platforms ?? [];
+    if (platforms.length === 0) return false;
+    if (!enemy.canAct()) {
+      enemy.platformExitDir = 0;
+      return false;
+    }
+
+    const playerPlatform = this.player.body.platformY ?? null;
+    const enemyPlatform = enemy.body.platformY ?? null;
+
+    // Once committed to stepping off, keep walking that way until actually
+    // down. Handing control back to the normal AI the moment the feet leave
+    // the deck used to steer the enemy straight back over the edge, where
+    // it re-landed and started again — it never got off the platform.
+    if (enemy.platformExitDir !== 0) {
+      if (enemyPlatform == null && enemy.body.grounded) {
+        enemy.platformExitDir = 0;
+      } else {
+        const dir = enemy.platformExitDir as 1 | -1;
+        enemy.body.vel.x = dir * enemy.effectiveMoveSpeed();
+        enemy.facing = dir;
+        if (enemy.body.grounded) enemy.setAnim('run');
+        enemy.isBlocking = false;
+        return true;
+      }
+    }
+
+    if (!enemy.body.grounded) return false;
+
+    // Coming back down. Without this the enemy would happily stand on the
+    // ledge directly above a player it can no longer reach (the hit test
+    // gates on height) and the fight would simply stop — it walks to the
+    // nearer edge and steps off instead.
+    if (enemyPlatform != null && playerPlatform == null) {
+      const here = platforms.find((p) => p.y === enemyPlatform && enemy.body.pos.x >= p.x && enemy.body.pos.x <= p.x + p.width);
+      if (here) {
+        if (enemy.platformExitDir === 0) {
+          // Decided once, then held: leave by the end the player is on when
+          // that is unambiguous, otherwise by the nearer edge. Re-deciding
+          // every frame while the player stands directly underneath makes
+          // the enemy flip direction each tick and never actually leave.
+          const dxPlayer = this.player.body.pos.x - enemy.body.pos.x;
+          const leftGap = enemy.body.pos.x - here.x;
+          const rightGap = here.x + here.width - enemy.body.pos.x;
+          enemy.platformExitDir = Math.abs(dxPlayer) > 60
+            ? (Math.sign(dxPlayer) as 1 | -1)
+            : (rightGap <= leftGap ? 1 : -1);
+        }
+        const dir = enemy.platformExitDir as 1 | -1;
+        enemy.body.vel.x = dir * enemy.effectiveMoveSpeed();
+        enemy.facing = dir;
+        enemy.setAnim('run');
+        enemy.isBlocking = false;
+        return true;
+      }
+    }
+
+    if (playerPlatform == null || enemyPlatform != null) return false;
+    if (enemy.platformJumpCooldownMs > 0) return false;
+
+    const target = platforms.find(
+      (p) => p.y === playerPlatform
+        && this.player.body.pos.x >= p.x
+        && this.player.body.pos.x <= p.x + p.width,
+    );
+    if (!target) return false;
+    // Only jump from a spot the arc actually clears onto — otherwise keep
+    // running (the normal AI is already closing the horizontal gap).
+    if (enemy.body.pos.x < target.x - 30 || enemy.body.pos.x > target.x + target.width + 30) return false;
+
+    enemy.body.vel.y = JUMP_VELOCITY;
+    enemy.body.grounded = false;
+    enemy.setAnim('jump', true);
+    enemy.platformJumpCooldownMs = 1500 + Math.random() * 900;
+    audio.play('jump');
+    return true;
   }
 
   private triggerEnemyMistake(enemy: Fighter): void {
@@ -2000,7 +2169,14 @@ export class GameEngine {
     const dx = defender.body.pos.x - attacker.body.pos.x;
     const facingCorrect = Math.sign(dx) === attacker.facing || Math.abs(dx) < 10;
     const inRange = Math.abs(dx) <= weapon.range + defender.width / 2;
-    if (!facingCorrect || !inRange) return;
+    // Two-level arenas need a vertical gate too: without one, a fighter on
+    // the raised platform and one directly underneath it would trade blows
+    // straight through the deck. The threshold scales with the taller of
+    // the two, so a genuine jump-in still connects while a whole storey
+    // apart never does.
+    const dy = Math.abs(attacker.body.pos.y - defender.body.pos.y);
+    const maxDy = 70 + Math.max(attacker.height, defender.height) * 0.25;
+    if (!facingCorrect || !inRange || dy > maxDy) return;
 
     const perfect = defender.anim === 'attack' || !!defender.bossTelegraph;
     this.applyHit(attacker, defender, weapon.id === 'fists' && isKick ? WEAPONS.fists : weapon, isKick, perfect);
@@ -2266,6 +2442,130 @@ export class GameEngine {
    * already applied on the hit (see applyHit / Fighter.applyWrap) — but it
    * is what sells "the character quickly wraps the enemy up" rather than
    * bands simply appearing out of nowhere. */
+  /** Thunderstorm bolts. A strike is aimed at a spot in the arena — often
+   * right where a fighter is standing, sometimes just nearby — telegraphed
+   * for a beat by a glowing patch of scorched ground, and then comes down.
+   * Whoever is still standing in it takes a real hit. It threatens the
+   * player and the enemy exactly alike: the weather is not on anybody's
+   * side, which is the whole joke. */
+  private updateLightning(dtMs: number): void {
+    if (!this.weather.lightning || this.phase !== 'playing') {
+      this.lightningStrike = null;
+      return;
+    }
+    const strike = this.lightningStrike;
+    if (!strike) {
+      this.lightningCooldownMs -= dtMs;
+      if (this.lightningCooldownMs > 0) return;
+      this.lightningCooldownMs = 5000 + Math.random() * 6000;
+      // Aim at one of the fighters most of the time (so it is a real
+      // hazard to play around) and at open ground otherwise (so it never
+      // feels like the sky is exclusively hunting people).
+      const candidates: number[] = [this.player.body.pos.x];
+      if (this.enemy && !this.enemy.isDead) candidates.push(this.enemy.body.pos.x);
+      const aimed = Math.random() < 0.72;
+      const baseX = aimed
+        ? candidates[Math.floor(Math.random() * candidates.length)]
+        : this.cameraX + Math.random() * this.viewWidth;
+      const x = Math.max(this.layout.minX, Math.min(this.layout.maxX, baseX + (Math.random() - 0.5) * 90));
+      this.lightningStrike = { x, warnMs: 900, boltMs: 260, struck: false };
+      audio.play('thunderRumble');
+      return;
+    }
+
+    if (strike.warnMs > 0) {
+      strike.warnMs -= dtMs;
+      if (strike.warnMs <= 0) {
+        // The bolt lands.
+        strike.struck = true;
+        audio.play('thunderCrack');
+        audio.vibrate([30, 20, 60]);
+        this.shake.add(0.7);
+        this.hitStop.trigger(90);
+        this.particles.burst({ x: strike.x, y: this.layout.groundY - 6 }, 22, {
+          color: '#fff59d', shape: 'spark', size: 10, life: 0.5, maxLife: 0.5,
+        });
+        this.particles.burst({ x: strike.x, y: this.layout.groundY - 2 }, 14, {
+          color: '#8d6e63', shape: 'dust', size: 8, gravity: 300, life: 0.6, maxLife: 0.6,
+        });
+        for (const f of [this.player, this.enemy]) {
+          if (!f || f.isDead) continue;
+          if (Math.abs(f.body.pos.x - strike.x) > 46) continue;
+          const dmg = Math.max(4, Math.round(f.maxHealth * (f.kind === 'boss' ? 0.07 : 0.14)));
+          this.dealDamageTo(f, applyDefense(dmg, f.stats.defense), false);
+          f.applyStun(900);
+          f.setAnim('stagger', true);
+          f.hitstunRemainingMs = Math.max(f.hitstunRemainingMs, 900);
+          applyKnockback(f.body, f.facing * -1, 120, 0.2);
+          this.spawnComicText('ZAPP!', f.body.pos.x, this.layout.groundY - 150 * f.scale, '#fff59d');
+          if (f.kind === 'player') this.showToast('VOM BLITZ GETROFFEN!', 1200);
+        }
+      }
+      return;
+    }
+    strike.boltMs -= dtMs;
+    if (strike.boltMs <= 0) this.lightningStrike = null;
+  }
+
+  private renderLightning(ctx: CanvasRenderingContext2D): void {
+    const strike = this.lightningStrike;
+    if (!strike) return;
+    const groundY = this.layout.groundY;
+    if (!strike.struck) {
+      // Telegraph: a pulsing scorched ring on the ground plus a faint
+      // column of charged air above it, so there is somewhere obvious to
+      // not be standing.
+      const urgency = 1 - strike.warnMs / 900;
+      const pulse = 0.4 + 0.6 * Math.abs(Math.sin(performance.now() / (90 - urgency * 45)));
+      ctx.save();
+      ctx.globalAlpha = 0.35 + urgency * 0.45;
+      ctx.strokeStyle = '#ffe082';
+      ctx.lineWidth = 2 + urgency * 2;
+      ctx.beginPath();
+      ctx.ellipse(strike.x, groundY + 2, 40 * pulse, 12 * pulse, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      const col = ctx.createLinearGradient(0, groundY - 300, 0, groundY);
+      col.addColorStop(0, 'rgba(255,241,160,0)');
+      col.addColorStop(1, `rgba(255,241,160,${0.16 + urgency * 0.22})`);
+      ctx.fillStyle = col;
+      ctx.fillRect(strike.x - 26, groundY - 300, 52, 300);
+      ctx.restore();
+      return;
+    }
+    // The bolt itself: a jagged fork from the top of the screen down to the
+    // ground, drawn twice (a wide soft glow under a hot white core).
+    const fade = Math.max(0, strike.boltMs / 260);
+    ctx.save();
+    ctx.globalAlpha = fade;
+    const segs = 9;
+    const path = () => {
+      ctx.beginPath();
+      ctx.moveTo(strike.x + Math.sin(strike.x) * 14, 0);
+      for (let i = 1; i <= segs; i++) {
+        const k = i / segs;
+        const jag = Math.sin(strike.x * 3 + i * 2.7) * 22 * (1 - k);
+        ctx.lineTo(strike.x + jag, groundY * k);
+      }
+    };
+    ctx.strokeStyle = 'rgba(180,215,255,0.55)';
+    ctx.lineWidth = 12;
+    ctx.lineJoin = 'round';
+    path();
+    ctx.stroke();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 4;
+    path();
+    ctx.stroke();
+    // The impact glare on the ground.
+    ctx.globalAlpha = fade * 0.8;
+    const glow = ctx.createRadialGradient(strike.x, groundY, 2, strike.x, groundY, 90);
+    glow.addColorStop(0, 'rgba(255,255,255,0.9)');
+    glow.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(strike.x - 90, groundY - 90, 180, 180);
+    ctx.restore();
+  }
+
   /** Plays the "tears its way out" beat once, the frame a wrap expires. */
   private consumeWrapBreak(f: Fighter): void {
     if (!f.wrapBreakPending) return;
@@ -2744,8 +3044,8 @@ export class GameEngine {
         const targets = h.owner === 'enemy' ? [this.player] : this.enemy ? [this.enemy] : [];
         for (const target of targets) {
           if (!target || target.isDead || h.triggered) continue;
-          const groundish = h.kind === 'banana' ? target.body.groundY : this.layout.groundY - 55;
-          const dist = distance(h.pos, { x: target.body.pos.x, y: h.kind === 'banana' ? target.body.groundY : groundish });
+          const groundish = h.kind === 'banana' ? floorY(target.body) : this.layout.groundY - 55;
+          const dist = distance(h.pos, { x: target.body.pos.x, y: h.kind === 'banana' ? floorY(target.body) : groundish });
           if (dist < h.radius) {
             this.triggerHazard(h, target);
           }
@@ -3029,7 +3329,7 @@ export class GameEngine {
     // character is genuinely bent over (see the 'fart' pose's shoulderDrop/
     // hipY). Scaled by f.scale so it also holds for any non-player fighter
     // that plays the death-fart (bosses/enemies at different sizes).
-    const originY = f.body.groundY - 26 * f.scale;
+    const originY = floorY(f.body) - 26 * f.scale;
     // Movement-quality pass 3: the burst now genuinely travels toward the
     // enemy (a tight jet for flame/shards, a wider puffy spread for the
     // plain gas cloud) instead of exploding evenly in every direction —
@@ -3194,6 +3494,51 @@ export class GameEngine {
   // Rendering
   // ---------------------------------------------------------------------
 
+  /** Where the camera would like to sit: centred on the fight itself (the
+   * midpoint between the two fighters) rather than rigidly on the player,
+   * so both stay framed while they close in on each other. */
+  private desiredCameraX(): number {
+    const focusX = this.enemy && !this.enemy.isDead
+      ? (this.player.body.pos.x + this.enemy.body.pos.x) / 2
+      : this.player.body.pos.x;
+    return focusX - this.viewWidth / 2;
+  }
+
+  /** Left/right edges of what the player can actually see right now. Things
+   * that exist to be *watched* (a mosquito buzzing in, a stork flying past)
+   * are placed against these rather than the arena bounds — in an arena
+   * twice as wide as the window, arena-bounds spawns would routinely happen
+   * entirely off-screen. */
+  private viewMinX(): number {
+    return Math.max(this.layout.minX, this.cameraX);
+  }
+
+  private viewMaxX(): number {
+    return Math.min(this.layout.maxX, this.cameraX + this.viewWidth);
+  }
+
+  private clampCamera(x: number): number {
+    return Math.max(0, Math.min(this.layout.width - this.viewWidth, x));
+  }
+
+  private updateCamera(dtSec: number): void {
+    const target = this.clampCamera(this.desiredCameraX());
+    // Exponential smoothing, frame-rate independent.
+    const k = 1 - Math.exp(-CAMERA_FOLLOW_PER_SEC * dtSec);
+    this.cameraX += (target - this.cameraX) * k;
+    // If the two fighters get far enough apart that one would leave the
+    // frame, pull the camera back towards whoever is off-screen so nobody
+    // is ever fighting something the player cannot see.
+    if (this.enemy && !this.enemy.isDead) {
+      const margin = 90;
+      for (const f of [this.player, this.enemy]) {
+        if (f.body.pos.x < this.cameraX + margin) this.cameraX = f.body.pos.x - margin;
+        if (f.body.pos.x > this.cameraX + this.viewWidth - margin) this.cameraX = f.body.pos.x - this.viewWidth + margin;
+      }
+    }
+    this.cameraX = this.clampCamera(this.cameraX);
+  }
+
   private render(dtSec: number): void {
     const ctx = this.ctx;
     const arena = ARENAS[this.arenaId] ?? ARENAS.meadow;
@@ -3201,7 +3546,11 @@ export class GameEngine {
 
     ctx.save();
     ctx.translate(this.shake.offsetX, this.shake.offsetY);
-    renderArena(ctx, arena, this.layout, t);
+    // Everything below is drawn in world coordinates; the camera is the one
+    // translate that turns those into screen coordinates.
+    ctx.translate(-Math.round(this.cameraX), 0);
+    this.layout.cameraX = this.cameraX;
+    renderArena(ctx, arena, this.layout, t, this.weather);
 
     for (const h of this.hazards) this.renderHazard(ctx, h);
     for (const p of this.projectiles) this.renderProjectile(ctx, p);
@@ -3226,6 +3575,7 @@ export class GameEngine {
     this.renderBeamEffect(ctx);
     this.renderTornadoEffect(ctx);
     this.renderPaperThrow(ctx);
+    this.renderLightning(ctx);
     this.particles.render(ctx);
     this.renderComicTexts(ctx);
     ctx.restore();

@@ -4,6 +4,7 @@ import { BALANCE } from '../data/balance';
 import { renderFighter } from '../game/engine/renderFighter';
 import { renderArena, type ArenaLayout } from '../game/engine/renderArena';
 import { ARENAS } from '../data/arenas';
+import { pickRandomWeather } from '../game/engine/weather';
 import { CHARACTERS } from '../data/characters';
 import type { CapeColorId, CharacterId } from '../game/types';
 
@@ -43,6 +44,11 @@ export function MenuArenaBackground({ characterId, capeColorId }: Props) {
     };
     resize();
     window.addEventListener('resize', resize);
+
+    // The menu weather is rolled once per mount, i.e. every time the player
+    // comes back to the main menu — so the scene behind the buttons is
+    // sunny one visit and pouring the next, the same way the arena is.
+    const weather = pickRandomWeather();
 
     const def = CHARACTERS[characterId];
     const player = new Fighter('menu_player', 'player', def.name, { ...BALANCE.player.baseStats }, 0, 0);
@@ -115,7 +121,7 @@ export function MenuArenaBackground({ characterId, capeColorId }: Props) {
       enemy.updateTimers(dt);
 
       ctx.clearRect(0, 0, w, h);
-      renderArena(ctx, ARENAS.meadow, layout, now / 1000);
+      renderArena(ctx, ARENAS.meadow, layout, now / 1000, weather);
       const dtSec = dt / 1000;
       const fighters = enemy.body.pos.x < playerX ? [enemy, player] : [player, enemy];
       for (const f of fighters) renderFighter(ctx, f, dtSec);
