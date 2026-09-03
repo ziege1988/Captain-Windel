@@ -1124,17 +1124,30 @@ export function drawWeaponInHand(ctx: CanvasRenderingContext2D, f: Fighter, hand
       break;
     }
     case 'bow': {
-      // Weapon-quality pass: the string now genuinely moves — pulled back
-      // through the attack's draw phase, held at full draw, then snapping
-      // forward again on release — with a nocked arrow visible while
-      // drawn, instead of a permanently flat string.
-      const bowRadius = 20;
-      const topAngle = Math.PI * 0.62;
-      const botAngle = Math.PI * 1.38;
-      const topX = 4 + Math.cos(topAngle) * bowRadius;
-      const topY = Math.sin(topAngle) * bowRadius;
-      const botX = 4 + Math.cos(botAngle) * bowRadius;
-      const botY = Math.sin(botAngle) * bowRadius;
+      // A bow is held upright, always — the limbs point up and down no
+      // matter where the hand happens to be. It used to inherit the arm's
+      // own direction like a swung weapon, so the moment the arm hung down
+      // at rest the whole bow rotated flat and lay across the hip like
+      // something stuck to the body. Cancelling the arm rotation puts it
+      // back in the body's frame: +x is straight ahead, +y is down, so the
+      // limbs stay vertical in every pose while the hand still carries it.
+      ctx.rotate(-angle);
+
+      // Geometry, all measured from the hand at (0, 0): the grip is the
+      // belly of the bow, so the hand is ON the riser rather than floating
+      // in front of it (it used to sit on the string, 16px clear of the
+      // bow itself). Limbs sweep back towards the archer and the string
+      // runs between their tips, behind the grip — which is also what puts
+      // the arrow, nocked on that string, pointing forwards past the hand.
+      const limbHalf = 20;   // tip-to-grip height, each way
+      const sagitta = 12;    // how far the belly stands proud of the tips
+      const bowRadius = (limbHalf * limbHalf + sagitta * sagitta) / (2 * sagitta);
+      const centreX = 2 - bowRadius;
+      const tipAngle = Math.atan2(limbHalf, 2 - sagitta - centreX);
+      const topX = centreX + Math.cos(-tipAngle) * bowRadius;
+      const topY = Math.sin(-tipAngle) * bowRadius;
+      const botX = topX;
+      const botY = -topY;
 
       let pull = 0;
       if (f.anim === 'attack') {
@@ -1147,13 +1160,26 @@ export function drawWeaponInHand(ctx: CanvasRenderingContext2D, f: Fighter, hand
         else if (at < releaseEnd) pull = Math.max(0, 1 - (at - drawEnd) / (releaseEnd - drawEnd));
         else pull = 0;
       }
-      const stringMidX = -pull * 16;
+      const stringMidX = topX - pull * 18;
 
+      // Limbs, tapering from a thick riser to thin tips.
       ctx.strokeStyle = weapon.color;
       ctx.lineWidth = 4;
       ctx.beginPath();
-      ctx.arc(4, 0, bowRadius, topAngle, botAngle);
+      ctx.arc(centreX, 0, bowRadius, -tipAngle, tipAngle);
       ctx.stroke();
+      ctx.strokeStyle = weapon.color;
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.arc(centreX, 0, bowRadius, -0.28, 0.28);
+      ctx.stroke();
+      // The grip the hand closes around, right at the belly.
+      ctx.strokeStyle = '#4a3520';
+      ctx.lineWidth = 7;
+      ctx.beginPath();
+      ctx.arc(centreX, 0, bowRadius, -0.14, 0.14);
+      ctx.stroke();
+
       ctx.strokeStyle = weapon.trailColor ?? '#f1c40f';
       ctx.lineWidth = 1.4;
       ctx.beginPath();
@@ -1166,13 +1192,13 @@ export function drawWeaponInHand(ctx: CanvasRenderingContext2D, f: Fighter, hand
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(stringMidX, 0);
-        ctx.lineTo(stringMidX + 26, 0);
+        ctx.lineTo(stringMidX + 40, 0);
         ctx.stroke();
         ctx.fillStyle = '#9e9e9e';
         ctx.beginPath();
-        ctx.moveTo(stringMidX + 26, 0);
-        ctx.lineTo(stringMidX + 20, -3);
-        ctx.lineTo(stringMidX + 20, 3);
+        ctx.moveTo(stringMidX + 40, 0);
+        ctx.lineTo(stringMidX + 33, -3);
+        ctx.lineTo(stringMidX + 33, 3);
         ctx.closePath();
         ctx.fill();
       }
@@ -1917,15 +1943,16 @@ function drawShield(
   const scale = 0.9 + bw * 0.25;
   const rx = 10 * scale;
   const ry = 16 * scale;
-  // The shield is centred on the hand, not parked at a fixed spot beside
-  // the body: the previous version clamped it between shoulder and hip,
-  // which meant it barely moved with the arm at all and read as stuck to
-  // the torso. It hangs off the grip and goes wherever the hand goes.
-  const cx = handX - 2 * scale;
-  const cy = handY;
-  // Tilts with the arm, so carrying it low at rest and raising it are
-  // visibly different.
-  const tilt = Math.atan2(armDy, Math.abs(armDx) + 20) * 0.55;
+  // A shield is strapped across the forearm, not dangled off the fist, so
+  // it is centred a little way back up the arm from the hand rather than on
+  // the hand itself — that is the span it actually covers, and it keeps the
+  // shield moving with the arm as one piece.
+  const cx = handX - armDx * 0.24;
+  const cy = handY - armDy * 0.24;
+  // And it stays close to upright. The face of a shield hangs vertically
+  // whatever the arm is doing; letting it swing round with the arm angle
+  // was most of why it read as an object stuck on at a random angle.
+  const tilt = Math.max(-0.22, Math.min(0.22, Math.atan2(armDy, Math.abs(armDx) + 20) * 0.16));
 
   ctx.save();
   ctx.translate(cx, cy);
