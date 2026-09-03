@@ -850,14 +850,16 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   if (charDef) drawPlayerClothing(ctx, charDef, shoulderX, shoulderY, hipY, bw);
   drawBodyAccessories(ctx, f, shoulderX, shoulderY, hipY);
 
-  // Back arm (behind torso) — and the shield it carries, drawn with it so
-  // the two always move together.
-  drawArm(ctx, shoulderX, shoulderY, pose.armBackX, pose.armBackY, f, false, pose.bendBack, bw);
+  // The shield goes down first, then the back arm on top of it, so the hand
+  // is seen closing around the grip rather than vanishing behind the face
+  // of the shield.
   drawShield(
     ctx, f,
     shoulderX + pose.armBackX, shoulderY + pose.armBackY,
-    shoulderY, hipY, pose.armBackX, pose.armBackY, bw,
+    pose.armBackX, pose.armBackY, bw,
   );
+  // Back arm (behind torso) — carries the shield, so the two move together.
+  drawArm(ctx, shoulderX, shoulderY, pose.armBackX, pose.armBackY, f, false, pose.bendBack, bw);
 
   // Head.
   ctx.beginPath();
@@ -1900,8 +1902,6 @@ function drawShield(
   f: Fighter,
   handX: number,
   handY: number,
-  shoulderY: number,
-  hipY: number,
   armDx: number,
   armDy: number,
   bw: number,
@@ -1909,17 +1909,17 @@ function drawShield(
   if (!f.accessories.includes('shield')) return;
 
   const scale = 0.9 + bw * 0.25;
-  const rx = 15 * scale;
-  const ry = 24 * scale;
-  // Sit the shield just outside the hand, away from the body, and let it
-  // tilt with the arm so it reads as strapped on rather than stuck on.
-  const outward = -1; // local -x is behind the facing direction, i.e. the flank
-  const cx = handX + outward * 9 * scale;
-  // Follow the arm, but stay a torso item: clamped between just under the
-  // shoulder and the hip, so a running arm swing never lifts the shield up
-  // beside the fighter's head.
-  const cy = Math.max(shoulderY + ry * 0.55, Math.min(hipY + 6, handY + 2));
-  const tilt = Math.atan2(armDy, Math.abs(armDx) + 24) * 0.4;
+  const rx = 10 * scale;
+  const ry = 16 * scale;
+  // The shield is centred on the hand, not parked at a fixed spot beside
+  // the body: the previous version clamped it between shoulder and hip,
+  // which meant it barely moved with the arm at all and read as stuck to
+  // the torso. It hangs off the grip and goes wherever the hand goes.
+  const cx = handX - 2 * scale;
+  const cy = handY;
+  // Tilts with the arm, so carrying it low at rest and raising it are
+  // visibly different.
+  const tilt = Math.atan2(armDy, Math.abs(armDx) + 20) * 0.55;
 
   ctx.save();
   ctx.translate(cx, cy);
@@ -1973,18 +1973,24 @@ function drawShield(
   ctx.beginPath();
   ctx.ellipse(-rx * 0.32, -ry * 0.12, rx * 0.42, ry * 0.55, 0.4, Math.PI * 0.85, Math.PI * 1.65);
   ctx.stroke();
-  ctx.restore();
 
-  // The forearm strap: a short leather loop where the arm meets the shield,
-  // drawn after it so the hand visibly grips it. Kept close to the hand so
-  // it never reads as a stray line across the body.
-  ctx.save();
+  // The grip: a leather handle bar across the middle, right where the hand
+  // closes around it. Drawn as part of the shield and, crucially, before
+  // the arm — the hand and forearm are then painted on top of it, so the
+  // fist is visibly wrapped around the handle instead of disappearing
+  // behind the shield face the way it did before.
   ctx.strokeStyle = '#6d4c2c';
-  ctx.lineWidth = 2.4;
+  ctx.lineWidth = 3;
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(handX + outward * 3, cy - 5);
-  ctx.quadraticCurveTo(handX + outward * -3, cy, handX + outward * 3, cy + 5);
+  ctx.moveTo(2, -6);
+  ctx.lineTo(2, 6);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(1, -5);
+  ctx.lineTo(1, 5);
   ctx.stroke();
   ctx.restore();
 }
