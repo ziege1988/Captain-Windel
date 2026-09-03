@@ -134,6 +134,13 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
 
 export const WEAPON_LIST = Object.values(WEAPONS);
 
+/** Weapons that occupy both hands. Nothing can be carried in the off-hand
+ * alongside one — a shield in particular is neither drawn nor counted while
+ * such a weapon is equipped (see Fighter.shieldActive). */
+export function usesTwoHands(id: WeaponId): boolean {
+  return id === 'bow';
+}
+
 // Weapons the player can actually end up holding: the starting fists plus
 // everything an upgrade grants. 'branch' and 'club' exist only as enemy
 // weapons (see enemies.ts / bosses.ts), so the arsenal screens should not

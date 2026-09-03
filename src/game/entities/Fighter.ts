@@ -1,6 +1,8 @@
 import type { AnimState, CapeColorId, CharacterId, FacingDirection, SpecialWeaponId, StatBlock, StatModifiers, WeaponId } from '../types';
 import { applyModifiers, defaultModifiers } from '../types';
 import { createBody, type PhysicsBody } from '../physics/physics';
+import { usesTwoHands } from '../../data/weapons';
+import { UPGRADES } from '../../data/upgrades';
 
 export type FighterKind = 'player' | 'enemy' | 'boss';
 
@@ -21,6 +23,10 @@ const SLIP_FALL_MS = 950;
 const SLIP_GETUP_MS = 600;
 const SLIP_DIZZY_MS = 1450;
 const SLIP_TOTAL_MS = SLIP_FALL_MS + SLIP_GETUP_MS + SLIP_DIZZY_MS;
+
+// The shield upgrade's own defence figure, read from the upgrade table so
+// the two cannot drift apart if it is ever retuned.
+const SHIELD_DEFENSE_ADD = UPGRADES.find((u) => u.id === 'shield')?.modifiers.defenseAdd ?? 0;
 
 export function freshStatus(): StatusEffects {
   return { slowMult: 1, slowUntilMs: 0, stunnedUntilMs: 0, frozenUntilMs: 0, dotPerSec: 0, dotUntilMs: 0, dotColor: '#7cb342' };
@@ -146,8 +152,24 @@ export class Fighter {
     this.body = createBody(x, groundY, groundY);
   }
 
+  /** Whether the carried shield is actually in use. A bow needs both hands,
+   * so while one is equipped the shield is slung and gives nothing — it is
+   * not drawn and its defence bonus does not count. */
+  get shieldActive(): boolean {
+    return this.accessories.includes('shield') && !usesTwoHands(this.weaponId);
+  }
+
   get stats(): StatBlock {
-    return applyModifiers(this.baseStats, this.modifiers);
+    const stats = applyModifiers(this.baseStats, this.modifiers);
+    if (this.accessories.includes('shield') && !this.shieldActive) {
+      // Take the bonus back off rather than tracking it separately: the
+      // modifier was folded in when the upgrade was picked up (see
+      // applyUpgradeToPlayer), and reading the figure from the upgrade
+      // itself keeps the two from drifting apart.
+      const shieldDefense = SHIELD_DEFENSE_ADD;
+      return { ...stats, defense: Math.max(0, stats.defense - shieldDefense) };
+    }
+    return stats;
   }
 
   get maxHealth(): number {

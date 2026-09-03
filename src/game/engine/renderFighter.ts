@@ -850,16 +850,19 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   if (charDef) drawPlayerClothing(ctx, charDef, shoulderX, shoulderY, hipY, bw);
   drawBodyAccessories(ctx, f, shoulderX, shoulderY, hipY);
 
-  // The shield goes down first, then the back arm on top of it, so the hand
-  // is seen closing around the grip rather than vanishing behind the face
-  // of the shield.
+  // Back arm, then the shield strapped to it. The shield covers the forearm
+  // and hand, which is exactly what a shield carried on that arm looks like
+  // from the side — the previous order drew the arm across the front of the
+  // shield, which no arm does. The upper arm stays visible running from the
+  // shoulder into the shield, so it still reads as carried rather than
+  // stuck on, and because the shield is centred on the hand the two always
+  // move as one.
+  drawArm(ctx, shoulderX, shoulderY, pose.armBackX, pose.armBackY, f, false, pose.bendBack, bw);
   drawShield(
     ctx, f,
     shoulderX + pose.armBackX, shoulderY + pose.armBackY,
     pose.armBackX, pose.armBackY, bw,
   );
-  // Back arm (behind torso) — carries the shield, so the two move together.
-  drawArm(ctx, shoulderX, shoulderY, pose.armBackX, pose.armBackY, f, false, pose.bendBack, bw);
 
   // Head.
   ctx.beginPath();
@@ -1906,7 +1909,10 @@ function drawShield(
   armDy: number,
   bw: number,
 ): void {
-  if (!f.accessories.includes('shield')) return;
+  // A bow is a two-handed weapon: no shield while it is drawn. Reads the
+  // same shieldActive rule the defence bonus does, so what is on screen and
+  // what the stats say can never disagree.
+  if (!f.shieldActive) return;
 
   const scale = 0.9 + bw * 0.25;
   const rx = 10 * scale;
@@ -1974,24 +1980,6 @@ function drawShield(
   ctx.ellipse(-rx * 0.32, -ry * 0.12, rx * 0.42, ry * 0.55, 0.4, Math.PI * 0.85, Math.PI * 1.65);
   ctx.stroke();
 
-  // The grip: a leather handle bar across the middle, right where the hand
-  // closes around it. Drawn as part of the shield and, crucially, before
-  // the arm — the hand and forearm are then painted on top of it, so the
-  // fist is visibly wrapped around the handle instead of disappearing
-  // behind the shield face the way it did before.
-  ctx.strokeStyle = '#6d4c2c';
-  ctx.lineWidth = 3;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(2, -6);
-  ctx.lineTo(2, 6);
-  ctx.stroke();
-  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(1, -5);
-  ctx.lineTo(1, 5);
-  ctx.stroke();
   ctx.restore();
 }
 
