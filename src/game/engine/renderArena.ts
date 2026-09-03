@@ -185,10 +185,12 @@ export function renderArena(
   for (const p of layout.platforms ?? []) drawPlatform(ctx, arena, p, groundY, timeSec, weather);
 }
 
-// The upper level: a solid wooden ledge on stilts, thick enough to read as
-// something you can stand on from across the arena, with the same grass and
-// weather treatment as the ground below so it belongs to the arena rather
-// than floating in front of it.
+// The upper level: not a built structure but a chunk of the arena floor
+// itself, torn out and left hanging in the air. Grass and flowers still
+// grow on top; the underside is raw earth that breaks off in an uneven,
+// crumbling edge, with loose clods and dangling roots drifting beneath it.
+// Nothing holds it up and nothing reaches the ground, so a fighter can run
+// straight past underneath — the only way onto it is a jump.
 function drawPlatform(
   ctx: CanvasRenderingContext2D,
   arena: ArenaDef,
@@ -197,98 +199,223 @@ function drawPlatform(
   timeSec: number,
   weather: WeatherState,
 ): void {
-  const thickness = 15;
   const dark = arena.isDark;
+  const grassBand = 9;      // the turf still growing on top
+  const soilDepth = 40;     // the solid body of earth under it
+  const seed = Math.round(p.x);
+
   ctx.save();
 
-  // Support posts down to the ground, one in from each end.
-  ctx.strokeStyle = dark ? '#241f1a' : '#5b4128';
-  ctx.lineWidth = 8;
-  ctx.lineCap = 'butt';
-  for (const px of [p.x + p.width * 0.16, p.x + p.width * 0.84]) {
-    ctx.beginPath();
-    ctx.moveTo(px, p.y + thickness - 2);
-    ctx.lineTo(px, groundY);
-    ctx.stroke();
-  }
-  // A diagonal brace on each post so the whole thing reads as built.
-  ctx.lineWidth = 4;
-  ctx.strokeStyle = dark ? '#1b1712' : '#4a3520';
-  ctx.beginPath();
-  ctx.moveTo(p.x + p.width * 0.16, groundY - 46);
-  ctx.lineTo(p.x + p.width * 0.30, p.y + thickness);
-  ctx.moveTo(p.x + p.width * 0.84, groundY - 46);
-  ctx.lineTo(p.x + p.width * 0.70, p.y + thickness);
-  ctx.stroke();
+  // --- The torn underside -------------------------------------------------
+  // A run of downward points of wildly different depth, so the break reads
+  // as something ripped loose rather than a cut slab. Depths come from the
+  // per-index hash, so the silhouette is stable frame to frame while every
+  // chunk in the arena tears differently.
+  // The broken edge is a wandering line of points at wildly different
+  // depths and irregular spacing, drawn through midpoint curves so it comes
+  // out lumpy and crumbled rather than as an even row of saw teeth. Every
+  // value comes from the per-index hash, so the silhouette is identical
+  // frame to frame while each island in the arena breaks differently.
+  const steps = Math.max(11, Math.round(p.width / 15));
+  const breakPoint = (i: number): { x: number; y: number } => {
+    const h1 = hash01(seed + i * 7 + 101);
+    const h2 = hash01(seed + i * 13 + 907);
+    const h3 = hash01(seed + i * 19 + 31);
+    // Deepest towards the middle, shallow at the ends: an island underside,
+    // not a uniform fringe.
+    const k = i / steps;
+    const mid = 1 - Math.abs(k * 2 - 1);
+    // Occasional long spike hanging much further down than its neighbours.
+    const spike = h3 > 0.82 ? 26 + h3 * 22 : 0;
+    const depth = soilDepth * (0.45 + mid * 0.55) + h1 * 20 * (0.3 + mid) + spike;
+    const jitter = (h2 - 0.5) * (p.width / steps) * 0.75;
+    return { x: p.x + p.width * k + jitter, y: p.y + depth };
+  };
+  const toothDepth = (i: number): number => breakPoint(Math.max(0, Math.min(steps, i))).y - p.y;
 
-  // The deck.
-  const deck = ctx.createLinearGradient(0, p.y, 0, p.y + thickness);
-  deck.addColorStop(0, dark ? '#6b5a45' : '#a5794a');
-  deck.addColorStop(1, dark ? '#3a3025' : '#6d4c2c');
-  ctx.fillStyle = deck;
-  ctx.beginPath();
-  ctx.roundRect(p.x, p.y, p.width, thickness, 4);
+  const bottomPath = () => {
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(p.x + p.width, p.y);
+    let prev = { x: p.x + p.width, y: p.y + soilDepth * 0.4 };
+    ctx.lineTo(prev.x, prev.y);
+    for (let i = steps; i >= 0; i--) {
+      const pt = breakPoint(i);
+      // Straight segments, not curves: torn earth breaks along hard facets,
+      // and smoothing the corners made the underside read as dripping wax.
+      // Between every pair of points the edge climbs back up by a random
+      // amount, so the profile is a run of uneven chunks and hollows rather
+      // than one continuous sag.
+      const hn = hash01(seed + i * 37 + 211);
+      const notchX = (prev.x + pt.x) / 2 + (hash01(seed + i * 47) - 0.5) * 8;
+      const notchY = p.y + soilDepth * (0.22 + hn * 0.5);
+      ctx.lineTo(notchX, notchY);
+      ctx.lineTo(pt.x, pt.y);
+      prev = pt;
+    }
+    ctx.lineTo(p.x, p.y + soilDepth * 0.4);
+    ctx.closePath();
+  };
+
+  // Earth body: dark and damp at the broken edge, drier towards the turf.
+  const soil = ctx.createLinearGradient(0, p.y, 0, p.y + soilDepth + 30);
+  soil.addColorStop(0, dark ? '#4a3a2a' : '#8a6239');
+  soil.addColorStop(0.45, dark ? '#33281c' : '#6b4a2a');
+  soil.addColorStop(1, dark ? '#1d1711' : '#3f2b18');
+  ctx.fillStyle = soil;
+  bottomPath();
   ctx.fill();
-  ctx.strokeStyle = dark ? '#191510' : '#4a3520';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
 
-  // Plank seams.
-  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
-  ctx.lineWidth = 1;
-  const planks = Math.max(4, Math.round(p.width / 46));
-  for (let i = 1; i < planks; i++) {
-    const px = p.x + (p.width * i) / planks;
+  // Embedded stones and darker soil pockets, clipped to the chunk so
+  // nothing spills outside its silhouette.
+  ctx.save();
+  bottomPath();
+  ctx.clip();
+  for (let i = 0; i < Math.round(p.width / 12); i++) {
+    const h1 = hash01(seed + i * 17 + 5);
+    const h2 = hash01(seed + i * 23 + 55);
+    const h3 = hash01(seed + i * 29 + 555);
+    ctx.fillStyle = h3 > 0.65
+      ? (dark ? 'rgba(150,145,135,0.5)' : 'rgba(190,180,165,0.55)')
+      : 'rgba(0,0,0,0.22)';
     ctx.beginPath();
-    ctx.moveTo(px, p.y + 1.5);
-    ctx.lineTo(px, p.y + thickness - 1.5);
+    ctx.ellipse(
+      p.x + h1 * p.width,
+      p.y + grassBand + h2 * (soilDepth + 18),
+      1.6 + h3 * 3.4, 1.2 + h3 * 2.4,
+      h1 * Math.PI, 0, Math.PI * 2,
+    );
+    ctx.fill();
+  }
+  // Roots hanging down out of the turf into the soil.
+  ctx.strokeStyle = dark ? 'rgba(220,210,190,0.25)' : 'rgba(240,225,195,0.35)';
+  ctx.lineWidth = 1.1;
+  ctx.lineCap = 'round';
+  for (let i = 0; i < Math.round(p.width / 18); i++) {
+    const h1 = hash01(seed + i * 41 + 9);
+    const h2 = hash01(seed + i * 43 + 99);
+    const rx = p.x + h1 * p.width;
+    const len = 10 + h2 * 26;
+    ctx.beginPath();
+    ctx.moveTo(rx, p.y + grassBand);
+    ctx.quadraticCurveTo(rx + (h2 - 0.5) * 10, p.y + grassBand + len * 0.6, rx + (h1 - 0.5) * 14, p.y + grassBand + len);
     ctx.stroke();
   }
+  ctx.restore();
 
-  // A lit top edge so the standing surface is unmistakable.
-  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-  ctx.lineWidth = 2;
+  // --- The turf on top ----------------------------------------------------
+  const turf = ctx.createLinearGradient(0, p.y - 1, 0, p.y + grassBand + 6);
+  turf.addColorStop(0, arena.groundColor);
+  turf.addColorStop(1, arena.groundColor2);
+  ctx.fillStyle = turf;
   ctx.beginPath();
-  ctx.moveTo(p.x + 2, p.y + 1);
-  ctx.lineTo(p.x + p.width - 2, p.y + 1);
+  ctx.moveTo(p.x, p.y - 1);
+  ctx.lineTo(p.x + p.width, p.y - 1);
+  // The turf/soil boundary dips and rises rather than being a ruled line —
+  // grass roots do not stop at a neat depth.
+  for (let i = steps; i >= 0; i--) {
+    const x = p.x + (p.width * i) / steps;
+    ctx.lineTo(x, p.y + grassBand + hash01(seed + i * 11 + 611) * 6 - 2);
+  }
+  ctx.closePath();
+  ctx.fill();
+  // A lit top edge, so where you actually land is unmistakable.
+  ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(p.x + 2, p.y);
+  ctx.lineTo(p.x + p.width - 2, p.y);
   ctx.stroke();
+  // Ragged turf overhanging the broken edges left and right.
+  ctx.fillStyle = arena.groundColor2;
+  for (const [ex, dir] of [[p.x, -1], [p.x + p.width, 1]] as [number, number][]) {
+    ctx.beginPath();
+    ctx.moveTo(ex, p.y - 1);
+    ctx.lineTo(ex + dir * 5, p.y + 2);
+    ctx.lineTo(ex + dir * 2, p.y + grassBand + 3);
+    ctx.lineTo(ex, p.y + grassBand);
+    ctx.closePath();
+    ctx.fill();
+  }
 
-  // Grass tufts growing over the front lip, swaying on the same wind.
+  // --- Loose clods drifting under the island ------------------------------
+  // These are what actually sell "floating": the chunk itself has to stay
+  // still (it is a collision surface), so the sense of hanging in the air
+  // comes from the debris bobbing slowly in its shadow.
+  const clods = Math.max(3, Math.round(p.width / 34));
+  ctx.fillStyle = dark ? '#2b2219' : '#5c3f24';
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < clods; i++) {
+    const h1 = hash01(seed + i * 53 + 3);
+    const h2 = hash01(seed + i * 59 + 33);
+    const h3 = hash01(seed + i * 61 + 333);
+    const cx = p.x + p.width * (0.08 + h1 * 0.84);
+    const drift = Math.sin(timeSec * (0.5 + h2 * 0.6) + h1 * 8) * (3 + h3 * 4);
+    const cy = p.y + soilDepth + 20 + h2 * 46 + drift;
+    const r = 2.5 + h3 * 5;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(timeSec * (0.2 + h3 * 0.5) + h1 * 6);
+    ctx.beginPath();
+    // A lumpy, deliberately non-round clod.
+    ctx.moveTo(-r, 0);
+    ctx.quadraticCurveTo(-r * 0.7, -r * 1.1, 0, -r * 0.8);
+    ctx.quadraticCurveTo(r * 0.9, -r * 0.9, r, r * 0.1);
+    ctx.quadraticCurveTo(r * 0.5, r, -r * 0.2, r * 0.85);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Grass tufts and the odd flower growing over the front lip, swaying on
+  // the same wind as the meadow below.
   if (!dark && (arena.palette === 'meadow' || arena.palette === 'forest')) {
     const gust = windGust(timeSec);
-    ctx.strokeStyle = 'rgba(32,80,26,0.55)';
+    ctx.strokeStyle = 'rgba(32,80,26,0.6)';
     ctx.lineWidth = 1.6;
     ctx.lineCap = 'round';
-    const tufts = Math.max(6, Math.round(p.width / 22));
+    const tufts = Math.max(8, Math.round(p.width / 16));
     for (let i = 0; i < tufts; i++) {
-      const h1 = hash01(i + 71000);
-      const h2 = hash01(i + 72000);
+      const h1 = hash01(i + seed + 71000);
+      const h2 = hash01(i + seed + 72000);
       const bx = p.x + ((i + h1) / tufts) * p.width;
-      const len = 5 + h2 * 7;
+      const len = 5 + h2 * 8;
       const sway = Math.sin(timeSec * (1.1 + h2) + h1 * 7) * (1.5 + gust * 4);
       ctx.beginPath();
-      ctx.moveTo(bx, p.y + 1);
-      ctx.quadraticCurveTo(bx + sway * 0.5, p.y + 1 - len * 0.6, bx + sway, p.y + 1 - len);
+      ctx.moveTo(bx, p.y);
+      ctx.quadraticCurveTo(bx + sway * 0.5, p.y - len * 0.6, bx + sway, p.y - len);
       ctx.stroke();
+    }
+    for (let i = 0; i < 3; i++) {
+      const h1 = hash01(i + seed + 74000);
+      const h2 = hash01(i + seed + 75000);
+      const fx = p.x + (0.15 + h1 * 0.7) * p.width;
+      const sway = Math.sin(timeSec * (0.9 + h2 * 0.8) + h1 * 6) * (1.5 + gust * 5);
+      drawFlower(ctx, fx, p.y - 8, arena.accentColor, sway, 0.6 + h2 * 0.3);
     }
   }
 
-  // In the wet, water runs off the front edge.
+  // In the wet, water runs off the broken edge and drips into the air.
   if (weather.rain > 0.4) {
-    ctx.strokeStyle = `rgba(200,225,255,${0.3 * weather.rain})`;
+    ctx.strokeStyle = `rgba(200,225,255,${0.32 * weather.rain})`;
     ctx.lineWidth = 1.2;
-    for (let i = 0; i < 5; i++) {
-      const h1 = hash01(i + 73000);
+    for (let i = 0; i < 6; i++) {
+      const h1 = hash01(i + seed + 73000);
       const cycle = (timeSec * (1.4 + h1) + h1 * 5) % 1;
       const dx = p.x + (0.12 + h1 * 0.76) * p.width;
       ctx.globalAlpha = 1 - cycle;
+      const from = p.y + toothDepth(Math.round(((dx - p.x) / p.width) * steps));
       ctx.beginPath();
-      ctx.moveTo(dx, p.y + thickness);
-      ctx.lineTo(dx, p.y + thickness + 6 + cycle * 26);
+      ctx.moveTo(dx, from);
+      ctx.lineTo(dx, from + 4 + cycle * 30);
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
   }
+
+  void groundY;
   ctx.restore();
 }
 
