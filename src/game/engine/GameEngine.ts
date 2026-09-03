@@ -280,23 +280,26 @@ const ARENA_WIDTH_MULT = 2;
 // exponential). Slow enough that it never snaps, fast enough that a running
 // fighter is never left at the edge of the frame.
 const CAMERA_FOLLOW_PER_SEC = 4.5;
-// Mario-style upper level: two jump-through ledges hanging over the arena
-// floor that either fighter can hop onto and fight on. The height is set
-// against the jump arc below (apex = jumpVel^2 / 2g), with real headroom to
-// spare so landing on one is comfortable rather than pixel-perfect.
+// Mario-style upper level: a jump-through floating island hanging over the
+// arena floor that either fighter can hop onto and fight on. The height is
+// set against the jump arc below (apex = jumpVel^2 / 2g), with real headroom
+// to spare so landing on it is comfortable rather than pixel-perfect.
 const PLATFORM_HEIGHT_ABOVE_GROUND = 145;
-const PLATFORM_WIDTH_FRACTION = 0.17; // of the whole arena width
+// Tripled from the original 0.17. At three times the width there is no
+// longer room for two islands — two would come to more than the whole arena
+// and would have to touch — so the upper level is now one large island in
+// the middle of the arena instead of a pair off to either side. It floats,
+// so it costs no ground space: the open running room underneath is
+// unchanged.
+const PLATFORM_WIDTH_FRACTION = 0.51; // of the whole arena width
 const JUMP_VELOCITY = -900;
 
-/** The two upper-level ledges, placed left-of-centre and right-of-centre so
- * neither sits directly over a spawn point and both are reachable from the
- * open ground beside them. */
+/** The upper level: one wide island centred in the arena, with open sky and
+ * open ground to either side of it. */
 function buildPlatforms(worldWidth: number, groundY: number): Platform[] {
   const width = worldWidth * PLATFORM_WIDTH_FRACTION;
-  const y = groundY - PLATFORM_HEIGHT_ABOVE_GROUND;
   return [
-    { x: worldWidth * 0.14, width, y },
-    { x: worldWidth * 0.69, width, y },
+    { x: (worldWidth - width) / 2, width, y: groundY - PLATFORM_HEIGHT_ABOVE_GROUND },
   ];
 }
 

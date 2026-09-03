@@ -201,7 +201,11 @@ function drawPlatform(
 ): void {
   const dark = arena.isDark;
   const grassBand = 9;      // the turf still growing on top
-  const soilDepth = 40;     // the solid body of earth under it
+  // A bigger chunk of ground is a thicker chunk of ground: the body of soil
+  // and the length of the broken spikes both scale with how wide the island
+  // is, or a wide one would read as a thin fringe hanging off a green line
+  // rather than as a slab torn out of the earth.
+  const soilDepth = 34 + Math.min(38, p.width * 0.05);
   const seed = Math.round(p.x);
 
   ctx.save();
@@ -216,7 +220,10 @@ function drawPlatform(
   // out lumpy and crumbled rather than as an even row of saw teeth. Every
   // value comes from the per-index hash, so the silhouette is identical
   // frame to frame while each island in the arena breaks differently.
-  const steps = Math.max(11, Math.round(p.width / 15));
+  // Feature size, not feature count, is what has to stay constant: spacing
+  // the break points by a fixed distance keeps the clods roughly the same
+  // size on a big island as on a small one.
+  const steps = Math.max(9, Math.round(p.width / 38));
   const breakPoint = (i: number): { x: number; y: number } => {
     const h1 = hash01(seed + i * 7 + 101);
     const h2 = hash01(seed + i * 13 + 907);
@@ -226,8 +233,8 @@ function drawPlatform(
     const k = i / steps;
     const mid = 1 - Math.abs(k * 2 - 1);
     // Occasional long spike hanging much further down than its neighbours.
-    const spike = h3 > 0.82 ? 26 + h3 * 22 : 0;
-    const depth = soilDepth * (0.45 + mid * 0.55) + h1 * 20 * (0.3 + mid) + spike;
+    const spike = h3 > 0.8 ? soilDepth * (0.5 + h3 * 0.7) : 0;
+    const depth = soilDepth * (0.45 + mid * 0.55) + h1 * soilDepth * 0.45 * (0.3 + mid) + spike;
     const jitter = (h2 - 0.5) * (p.width / steps) * 0.75;
     return { x: p.x + p.width * k + jitter, y: p.y + depth };
   };
@@ -295,7 +302,7 @@ function drawPlatform(
     const h1 = hash01(seed + i * 41 + 9);
     const h2 = hash01(seed + i * 43 + 99);
     const rx = p.x + h1 * p.width;
-    const len = 10 + h2 * 26;
+    const len = 10 + h2 * (18 + soilDepth * 0.5);
     ctx.beginPath();
     ctx.moveTo(rx, p.y + grassBand);
     ctx.quadraticCurveTo(rx + (h2 - 0.5) * 10, p.y + grassBand + len * 0.6, rx + (h1 - 0.5) * 14, p.y + grassBand + len);
@@ -342,7 +349,7 @@ function drawPlatform(
   // These are what actually sell "floating": the chunk itself has to stay
   // still (it is a collision surface), so the sense of hanging in the air
   // comes from the debris bobbing slowly in its shadow.
-  const clods = Math.max(3, Math.round(p.width / 34));
+  const clods = Math.max(3, Math.round(p.width / 42));
   ctx.fillStyle = dark ? '#2b2219' : '#5c3f24';
   ctx.strokeStyle = 'rgba(0,0,0,0.3)';
   ctx.lineWidth = 1;
@@ -352,8 +359,8 @@ function drawPlatform(
     const h3 = hash01(seed + i * 61 + 333);
     const cx = p.x + p.width * (0.08 + h1 * 0.84);
     const drift = Math.sin(timeSec * (0.5 + h2 * 0.6) + h1 * 8) * (3 + h3 * 4);
-    const cy = p.y + soilDepth + 20 + h2 * 46 + drift;
-    const r = 2.5 + h3 * 5;
+    const cy = p.y + soilDepth + 16 + h2 * (46 + soilDepth * 0.4) + drift;
+    const r = 3 + h3 * 6.5;
     ctx.save();
     ctx.translate(cx, cy);
     ctx.rotate(timeSec * (0.2 + h3 * 0.5) + h1 * 6);
