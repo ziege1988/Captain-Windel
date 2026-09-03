@@ -285,13 +285,16 @@ const CAMERA_FOLLOW_PER_SEC = 4.5;
 // set against the jump arc below (apex = jumpVel^2 / 2g), with real headroom
 // to spare so landing on it is comfortable rather than pixel-perfect.
 const PLATFORM_HEIGHT_ABOVE_GROUND = 145;
-// Tripled from the original 0.17. At three times the width there is no
-// longer room for two islands — two would come to more than the whole arena
-// and would have to touch — so the upper level is now one large island in
-// the middle of the arena instead of a pair off to either side. It floats,
-// so it costs no ground space: the open running room underneath is
-// unchanged.
-const PLATFORM_WIDTH_FRACTION = 0.51; // of the whole arena width
+// Roughly doubled from the original 0.17, after 3x turned out to be wider
+// than the screen itself: the island filled the whole field of view and
+// stopped reading as something floating in it. At this size the entire
+// island — both broken ends and open sky either side — fits on screen while
+// the camera is framing it, which is what makes it look like it is hanging
+// there. There is no room for two of them any more, so the upper level is
+// one island in the middle of the arena rather than a pair off to either
+// side. It floats, so it costs no ground space: the open running room
+// underneath is unchanged.
+const PLATFORM_WIDTH_FRACTION = 0.38; // of the whole arena width
 const JUMP_VELOCITY = -900;
 
 /** The upper level: one wide island centred in the arena, with open sky and
