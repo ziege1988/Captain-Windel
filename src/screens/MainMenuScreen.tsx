@@ -52,7 +52,7 @@ export function MainMenuScreen() {
             CAPTAIN WINDEL
           </h1>
           <p style={{ opacity: 0.85, marginTop: 2, marginBottom: 0, fontSize: 12.5, textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}>
-            Windel. Umhang. Absurde Superkräfte.
+            Absurder geht&apos;s nicht …
           </p>
           <p style={{ marginTop: 4, fontSize: 13.5, fontWeight: 700, color: '#ffd54f', textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}>
             🪙 {save.coins}

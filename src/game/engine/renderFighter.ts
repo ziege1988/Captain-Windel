@@ -850,8 +850,14 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   if (charDef) drawPlayerClothing(ctx, charDef, shoulderX, shoulderY, hipY, bw);
   drawBodyAccessories(ctx, f, shoulderX, shoulderY, hipY);
 
-  // Back arm (behind torso).
+  // Back arm (behind torso) — and the shield it carries, drawn with it so
+  // the two always move together.
   drawArm(ctx, shoulderX, shoulderY, pose.armBackX, pose.armBackY, f, false, pose.bendBack, bw);
+  drawShield(
+    ctx, f,
+    shoulderX + pose.armBackX, shoulderY + pose.armBackY,
+    shoulderY, hipY, pose.armBackX, pose.armBackY, bw,
+  );
 
   // Head.
   ctx.beginPath();
@@ -868,7 +874,6 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   drawArm(ctx, shoulderX, shoulderY, pose.armFrontX, pose.armFrontY, f, true, pose.bendFront, bw);
   drawWeaponInHand(ctx, f, shoulderX + pose.armFrontX, shoulderY + pose.armFrontY, pose.armFrontX, pose.armFrontY);
 
-  drawExtraAccessories(ctx, f, hipY);
   drawStatusOverlay(ctx, f, shoulderY, hipY);
 
   ctx.restore();
@@ -1882,19 +1887,104 @@ function drawHeadAccessories(ctx: CanvasRenderingContext2D, f: Fighter, hx: numb
   }
 }
 
-// Section (character-quality overhaul): shoes are now drawn inline with
-// the legs in renderFighter() via drawShoe/resolveShoeStyle above — this
-// only handles the remaining non-foot equipment accessory (a shield worn
-// on the back arm's side).
-function drawExtraAccessories(ctx: CanvasRenderingContext2D, f: Fighter, hipY: number): void {
+// The shield used to be a small ellipse pinned to a fixed spot beside the
+// hip, unconnected to anything the body was doing — it just hung there and
+// slid around as the figure moved. It is now carried the way a shield
+// actually is: strapped to the off-hand (the back arm, since the front hand
+// holds the weapon), so it swings with that arm, and held out at the
+// fighter's flank rather than flat across the chest, where it would hide
+// the torso and face. Big oval body, riveted rim, a raised central boss and
+// the arm strap visible where the forearm crosses behind it.
+function drawShield(
+  ctx: CanvasRenderingContext2D,
+  f: Fighter,
+  handX: number,
+  handY: number,
+  shoulderY: number,
+  hipY: number,
+  armDx: number,
+  armDy: number,
+  bw: number,
+): void {
   if (!f.accessories.includes('shield')) return;
+
+  const scale = 0.9 + bw * 0.25;
+  const rx = 15 * scale;
+  const ry = 24 * scale;
+  // Sit the shield just outside the hand, away from the body, and let it
+  // tilt with the arm so it reads as strapped on rather than stuck on.
+  const outward = -1; // local -x is behind the facing direction, i.e. the flank
+  const cx = handX + outward * 9 * scale;
+  // Follow the arm, but stay a torso item: clamped between just under the
+  // shoulder and the hip, so a running arm swing never lifts the shield up
+  // beside the fighter's head.
+  const cy = Math.max(shoulderY + ry * 0.55, Math.min(hipY + 6, handY + 2));
+  const tilt = Math.atan2(armDy, Math.abs(armDx) + 24) * 0.4;
+
   ctx.save();
-  ctx.fillStyle = '#607d8b';
-  ctx.strokeStyle = '#37474f';
+  ctx.translate(cx, cy);
+  ctx.rotate(tilt);
+
+  // Body, lit from the top-left so it reads as a curved, domed face rather
+  // than a flat disc.
+  const face = ctx.createLinearGradient(-rx, -ry, rx, ry);
+  face.addColorStop(0, '#8fa4ae');
+  face.addColorStop(0.5, '#607d8b');
+  face.addColorStop(1, '#3d5560');
+  ctx.fillStyle = face;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Rim.
+  ctx.strokeStyle = '#2b3b43';
+  ctx.lineWidth = 2.6;
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
   ctx.lineWidth = 1.2;
   ctx.beginPath();
-  ctx.ellipse(-16, hipY - 20, 8, 16, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 0, rx - 3, ry - 3, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Rivets around the rim.
+  ctx.fillStyle = '#cfd8dc';
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2 + 0.3;
+    ctx.beginPath();
+    ctx.arc(Math.cos(a) * (rx - 4.5), Math.sin(a) * (ry - 4.5), 1.3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Raised central boss.
+  const boss = ctx.createRadialGradient(-2, -3, 1, 0, 0, 7 * scale);
+  boss.addColorStop(0, '#eceff1');
+  boss.addColorStop(1, '#546e7a');
+  ctx.fillStyle = boss;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 6 * scale, 7 * scale, 0, 0, Math.PI * 2);
   ctx.fill();
+  ctx.strokeStyle = '#2b3b43';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Highlight sweep.
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.ellipse(-rx * 0.32, -ry * 0.12, rx * 0.42, ry * 0.55, 0.4, Math.PI * 0.85, Math.PI * 1.65);
+  ctx.stroke();
+  ctx.restore();
+
+  // The forearm strap: a short leather loop where the arm meets the shield,
+  // drawn after it so the hand visibly grips it. Kept close to the hand so
+  // it never reads as a stray line across the body.
+  ctx.save();
+  ctx.strokeStyle = '#6d4c2c';
+  ctx.lineWidth = 2.4;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(handX + outward * 3, cy - 5);
+  ctx.quadraticCurveTo(handX + outward * -3, cy, handX + outward * 3, cy + 5);
   ctx.stroke();
   ctx.restore();
 }
