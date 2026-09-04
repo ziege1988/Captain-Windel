@@ -70,6 +70,20 @@ export const SUPERPOWERS: Record<SuperpowerId, SuperpowerDef> = {
     effectDurationMs: 1800,
     color: '#ffeb3b',
   },
+  poop: {
+    id: 'poop',
+    name: 'Kacken',
+    icon: '💩',
+    // Unlike every other power this one deals no direct damage at all: it
+    // leaves a trap on the ground and pays off when the enemy walks into
+    // it, so it rewards positioning rather than aim.
+    description: 'Windelmann dreht sich um, geht in die Hocke und legt einen Haufen ab. Wer reintritt, rutscht aus.',
+    unlockAfterBossIndex: 1,
+    cooldownMs: 18000,
+    damage: 12,
+    effectDurationMs: 16000,
+    color: '#795548',
+  },
   nuclear: {
     id: 'nuclear',
     name: 'Druckwellen-Furz',

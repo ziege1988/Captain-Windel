@@ -239,6 +239,44 @@ function computePose(f: Fighter): Pose {
       );
     case 'vomit':
       return { ...STAND, bodyLean: 0.5, hipY: 4, armFrontX: 14, armFrontY: 30, armBackX: 12, armBackY: 32, headOffsetY: 10 };
+    case 'poop': {
+      // Kacken: the same turn-away as the fart, but it goes all the way
+      // down into a real squat and holds there — knees out, hands on the
+      // knees, a little strain wobble — instead of the fart's hip-hinge
+      // lean. Reuses turnFlip so the 180 is the same genuine mirror-flip
+      // the fart does, not a fade.
+      const turnEnd = 0.3;
+      const squatEnd = 0.62;
+      const holdEnd = 1.5;
+      const totalEnd = 1.95;
+      let turn: number, crouch: number, shoulderDrop: number, legSpread: number, lean: number;
+      if (t < turnEnd) {
+        const p = t / turnEnd;
+        turn = p; crouch = p * 5; shoulderDrop = p * 4; legSpread = p * 2; lean = p * 0.05;
+      } else if (t < squatEnd) {
+        const p = (t - turnEnd) / (squatEnd - turnEnd);
+        turn = 1; crouch = 5 + p * 29; shoulderDrop = 4 + p * 26; legSpread = 2 + p * 7; lean = 0.05 + p * 0.2;
+      } else if (t < holdEnd) {
+        const p = (t - squatEnd) / (holdEnd - squatEnd);
+        // The strain: a slow push with a couple of sharper shudders.
+        const strain = Math.sin(p * Math.PI * 3) * 2.2 + Math.sin(p * Math.PI) * 2;
+        turn = 1; crouch = 34 + strain; shoulderDrop = 30 + strain * 0.7; legSpread = 9; lean = 0.25;
+      } else {
+        const p = Math.min(1, (t - holdEnd) / (totalEnd - holdEnd));
+        turn = 1 - p;
+        crouch = 34 - p * 34; shoulderDrop = 30 - p * 30; legSpread = 9 - p * 9; lean = 0.25 - p * 0.25;
+      }
+      return {
+        ...STAND, turnFlip: turn, bodyLean: lean, hipY: crouch, shoulderDrop,
+        // Hands braced on the knees.
+        armFrontX: 10, armFrontY: 20 - crouch * 0.25,
+        armBackX: -10, armBackY: 20 - crouch * 0.25,
+        legFrontX: 8 + legSpread, legFrontY: 40 - crouch * 0.75,
+        legBackX: -8 - legSpread, legBackY: 40 - crouch * 0.75,
+        capeKick: 0.25 + crouch * 0.012,
+        bendFront: 0.16 + crouch * 0.02, bendBack: 0.16 + crouch * 0.02,
+      };
+    }
     case 'superpower':
     case 'fart': {
       // Movement-quality pass 3 (root-cause fix): the previous version only
@@ -572,6 +610,84 @@ function drawHand(ctx: CanvasRenderingContext2D, x: number, y: number, dirX: num
   ctx.restore();
 }
 
+/** A real boxing glove rather than a red dot: an egg-shaped mitt that is
+ * fatter at the knuckles than at the wrist, a separate thumb bulge on the
+ * inside, the seam running over the knuckles, a laced wrist cuff and a
+ * highlight on the leather. Oriented along the forearm, like the bare hand
+ * it replaces, so it always reads as attached rather than stuck on. */
+function drawBoxingGlove(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  dirX: number,
+  dirY: number,
+  r: number,
+): void {
+  const angle = Math.atan2(dirY, dirX);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  // +x now runs out of the wrist towards the knuckles.
+
+  // Wrist cuff, drawn first so the mitt overlaps it.
+  ctx.fillStyle = '#8e2318';
+  ctx.strokeStyle = '#5d1710';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(-r * 1.05, -r * 0.62, r * 0.75, r * 1.24, r * 0.2);
+  ctx.fill();
+  ctx.stroke();
+  // Laces across the cuff.
+  ctx.strokeStyle = '#f2e3c8';
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  for (let i = 0; i < 3; i++) {
+    const lx = -r * 0.95 + i * r * 0.26;
+    ctx.moveTo(lx, -r * 0.4);
+    ctx.lineTo(lx + r * 0.16, r * 0.4);
+  }
+  ctx.stroke();
+
+  // The mitt: an egg, wide at the knuckles and tapering back to the wrist.
+  const leather = ctx.createLinearGradient(-r, -r, r, r);
+  leather.addColorStop(0, '#e2503f');
+  leather.addColorStop(0.55, '#c0392b');
+  leather.addColorStop(1, '#8e2318');
+  ctx.fillStyle = leather;
+  ctx.strokeStyle = '#5d1710';
+  ctx.lineWidth = 1.1;
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.5, -r * 0.72);
+  ctx.quadraticCurveTo(r * 0.75, -r * 1.05, r * 1.02, -r * 0.28);
+  ctx.quadraticCurveTo(r * 1.2, r * 0.3, r * 0.55, r * 0.86);
+  ctx.quadraticCurveTo(-r * 0.15, r * 1.05, -r * 0.5, r * 0.72);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Thumb, a separate bulge low on the inside edge.
+  ctx.beginPath();
+  ctx.ellipse(r * 0.1, r * 0.72, r * 0.42, r * 0.3, -0.25, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Knuckle seam.
+  ctx.strokeStyle = 'rgba(93,23,16,0.85)';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(r * 0.62, -r * 0.66);
+  ctx.quadraticCurveTo(r * 0.86, 0, r * 0.5, r * 0.66);
+  ctx.stroke();
+
+  // Leather highlight.
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.ellipse(r * 0.1, -r * 0.3, r * 0.5, r * 0.28, -0.35, Math.PI * 0.9, Math.PI * 1.75);
+  ctx.stroke();
+  ctx.restore();
+}
+
 export type ShoeStyle = 'player' | 'default' | 'big' | 'boot' | 'ninja' | 'armored' | 'claw' | 'metal' | 'none';
 
 /** A per-character shoe silhouette (toe/heel/sole) instead of the old
@@ -891,15 +1007,7 @@ function drawArm(
   const isGlove = f.accessories.includes('gloves') || f.accessories.includes('boxingGloves');
   const limb = drawLimb(ctx, sx, sy, sx + dx, sy + dy, 2.8 * widthMult, 2.1 * widthMult, bend, 1, f.color);
   if (isGlove) {
-    ctx.save();
-    ctx.fillStyle = '#c0392b';
-    ctx.strokeStyle = '#8e2318';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.arc(sx + dx, sy + dy, front ? 7.5 : 6.5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
+    drawBoxingGlove(ctx, sx + dx, sy + dy, limb.dirX, limb.dirY, front ? 8.5 : 7.4);
   } else {
     drawHand(ctx, sx + dx, sy + dy, limb.dirX, limb.dirY, false);
   }

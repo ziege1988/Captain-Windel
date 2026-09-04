@@ -72,7 +72,7 @@ interface Projectile {
 
 interface Hazard {
   id: number;
-  kind: 'egg' | 'balloon' | 'banana' | 'bonusBomb' | 'fireWave' | 'frostNova' | 'diaperBomb'
+  kind: 'egg' | 'balloon' | 'banana' | 'bonusBomb' | 'fireWave' | 'frostNova' | 'diaperBomb' | 'poop'
     | 'poopBomb' | 'explodingDuck' | 'bigBoomerangOut' | 'bigBoomerangBack' | 'tornado' | 'eggBomberEgg' | 'confetti';
   pos: { x: number; y: number };
   vel: { x: number; y: number };
@@ -395,6 +395,8 @@ export class GameEngine {
   private tornadoEffect: TornadoEffect | null = null;
   // Comic impact bursts — one per landed hit, sized by what landed it.
   private impacts: ImpactBurst[] = [];
+  // Counts down from the Kacken squat to the moment the pile actually lands.
+  private poopDropDelayMs = 0;
   // Klopapier weapon: the paper ribbon flying from hand to target on a hit.
   private paperThrow: { fromX: number; fromY: number; toX: number; toY: number; ageMs: number; totalMs: number } | null = null;
   // Mosquito pass: current mosquito (if any) and a cooldown before the next
@@ -1487,6 +1489,13 @@ export class GameEngine {
     if ((this.superpowerCooldowns.get(id) ?? 0) > 0) return;
     const def = SUPERPOWERS[id];
     this.superpowerCooldowns.set(id, def.cooldownMs);
+    // Kacken has its own, longer pose (turn -> deep squat -> strain -> back
+    // up) and drops its pile on its own schedule, so it runs straight away
+    // instead of going through the shared fart windup below.
+    if (id === 'poop') {
+      this.firePoop();
+      return;
+    }
     this.player.setAnim('fart', true);
     // Movement-quality pass 3: covers the full glance -> turn -> bend ->
     // held-release -> return motion (see the 'fart' pose in
@@ -1503,7 +1512,56 @@ export class GameEngine {
     window.setTimeout(() => this.fireSuperpower(id), 680);
   }
 
+  /** Kacken. The squat itself is the pose (see the 'poop' anim); this
+   * schedules the drop for the middle of the hold beat so the pile appears
+   * when the character is actually down there, not the instant the button
+   * is pressed. */
+  private firePoop(): void {
+    const player = this.player;
+    player.setAnim('poop', true);
+    player.hitstunRemainingMs = Math.max(player.hitstunRemainingMs, 1900);
+    player.body.vel.x = 0;
+    audio.playFart();
+    this.poopDropDelayMs = 850;
+  }
+
+  private updatePoopDrop(dtMs: number): void {
+    if (this.poopDropDelayMs <= 0) return;
+    this.poopDropDelayMs -= dtMs;
+    if (this.poopDropDelayMs > 0) return;
+    this.poopDropDelayMs = 0;
+
+    const def = SUPERPOWERS.poop;
+    const player = this.player;
+    // Dropped just in front of the character, i.e. on the side the enemy
+    // will come from — a trap only pays off if it is in the way.
+    const x = player.body.pos.x + player.facing * 26 * player.scale;
+    const y = floorY(player.body);
+    hazardCounter += 1;
+    this.hazards.push({
+      id: hazardCounter, kind: 'poop',
+      pos: { x, y },
+      vel: { x: 0, y: 0 },
+      timer: def.effectDurationMs,
+      radius: 30,
+      owner: 'player',
+      triggered: false,
+    });
+    audio.play('poopPlop');
+    this.particles.burst({ x, y: y - 8 }, 8, { color: '#6d4c2c', shape: 'drop', size: 5, gravity: 400, life: 0.4, maxLife: 0.4 });
+    this.particles.burst({ x, y: y - 20 }, 10, { color: '#8bc34a', shape: 'cloud', size: 14, life: 1.1, maxLife: 1.1 });
+    this.spawnComicText('PLOPP!', x, y - 60, '#8bc34a');
+    this.showToast('HAUFEN GELEGT!', 1100);
+  }
+
   private fireSuperpower(id: SuperpowerId): void {
+    // Kacken leaves a trap on the ground rather than throwing anything at
+    // the enemy, so it runs its own path: no aimed cloud, no direct damage,
+    // no requirement that the enemy is even in range.
+    if (id === 'poop') {
+      this.firePoop();
+      return;
+    }
     if (!this.enemy || this.enemy.isDead) return;
     const def = SUPERPOWERS[id];
     // Section (quality pass): each power gets its own base shape instead of
@@ -1839,6 +1897,7 @@ export class GameEngine {
     this.updatePaperThrow(dtMs);
     this.updateLightning(dtMs);
     this.updateImpacts(dtMs);
+    this.updatePoopDrop(dtMs);
     this.consumeWrapBreak(player);
     if (enemy) this.consumeWrapBreak(enemy);
     this.updateMosquitoSpawn(dtMs);
@@ -3253,21 +3312,26 @@ export class GameEngine {
         const targets = h.owner === 'enemy' ? [this.player] : this.enemy ? [this.enemy] : [];
         for (const target of targets) {
           if (!target || target.isDead || h.triggered) continue;
-          const groundish = h.kind === 'banana' ? floorY(target.body) : this.layout.groundY - 55;
-          const dist = distance(h.pos, { x: target.body.pos.x, y: h.kind === 'banana' ? floorY(target.body) : groundish });
+          // Ground traps sit on whatever surface their victim is standing
+          // on, so a fighter up on the platform is not caught by one lying
+          // on the arena floor below.
+          const groundTrap = h.kind === 'banana' || h.kind === 'poop';
+          const groundish = groundTrap ? floorY(target.body) : this.layout.groundY - 55;
+          const dist = distance(h.pos, { x: target.body.pos.x, y: groundish });
           if (dist < h.radius) {
             this.triggerHazard(h, target);
           }
         }
       }
 
-      if ((h.kind !== 'banana' && h.timer <= 0) || h.triggered) {
+      const groundTrapKind = h.kind === 'banana' || h.kind === 'poop';
+      if ((!groundTrapKind && h.timer <= 0) || h.triggered) {
         const timerFired = ['egg', 'bonusBomb', 'frostNova', 'diaperBomb', 'tornado'] as Hazard['kind'][];
         if (timerFired.includes(h.kind) && h.timer <= 0 && !h.triggered) {
           this.triggerHazard(h, null);
         }
         this.hazards.splice(i, 1);
-      } else if (h.kind === 'banana' && h.timer <= 0) {
+      } else if (groundTrapKind && h.timer <= 0) {
         this.hazards.splice(i, 1);
       }
     }
@@ -3354,6 +3418,29 @@ export class GameEngine {
         this.spawnComicText('WUPPS!', h.pos.x, this.layout.groundY - 120 * directTarget.scale, '#fdd835');
         this.addScore(400);
         this.showToast('AUSGERUTSCHT!', 1400);
+      }
+    } else if (h.kind === 'poop') {
+      if (directTarget && directTarget.kind !== 'player') {
+        // Stepping in it takes the feet out from under you exactly as
+        // thoroughly as the banana peel does, so it reuses the same
+        // pratfall — plus chip damage, a lingering slow while it is being
+        // scraped off, and the disgust beat the gas cloud already uses.
+        this.particles.burst({ x: h.pos.x, y: this.layout.groundY - 6 }, 12, {
+          color: '#6d4c2c', shape: 'drop', size: 6, gravity: 320, life: 0.6, maxLife: 0.6,
+        });
+        this.particles.burst({ x: h.pos.x, y: this.layout.groundY - 30 }, 14, {
+          color: '#8bc34a', shape: 'cloud', size: 18, life: 1.2, maxLife: 1.2,
+        });
+        audio.play('slip');
+        audio.play('bodyThud');
+        this.shake.add(0.25);
+        directTarget.startSlip();
+        directTarget.applySlow(0.6, 2500);
+        this.dealDamageTo(directTarget, applyDefense(SUPERPOWERS.poop.damage, directTarget.stats.defense), false);
+        applyKnockback(directTarget.body, directTarget.facing, 300, 0);
+        this.spawnComicText('IIIH!', h.pos.x, this.layout.groundY - 130 * directTarget.scale, '#8bc34a');
+        this.addScore(500);
+        this.showToast('REINGETRETEN!', 1300);
       }
     } else if (h.kind === 'bonusBomb') {
       // Section 8 (quality update): a real explosion with a real AoE hit —
@@ -4094,6 +4181,94 @@ export class GameEngine {
       ctx.beginPath();
       ctx.ellipse(0, 0, 16, 6, 0.3, 0, Math.PI * 2);
       ctx.fill();
+    } else if (h.kind === 'poop') {
+      // The pile: three stacked coils, widest at the bottom, with a little
+      // twist on top. It sits on the ground line, so it is drawn upwards
+      // from the hazard's own position.
+      const settle = Math.min(1, (SUPERPOWERS.poop.effectDurationMs - h.timer) / 260);
+      const fadeOut = Math.min(1, h.timer / 1200); // dries up and vanishes at the end
+      const t = performance.now() / 1000;
+      ctx.save();
+      ctx.globalAlpha = fadeOut;
+      ctx.scale(1, settle); // squashes into existence rather than popping in
+
+      const coil = ctx.createLinearGradient(-14, -26, 14, 2);
+      coil.addColorStop(0, '#8d6e4a');
+      coil.addColorStop(0.5, '#6d4c2c');
+      coil.addColorStop(1, '#4a3320');
+      ctx.fillStyle = coil;
+      ctx.strokeStyle = '#3a2718';
+      ctx.lineWidth = 1.2;
+      const coils: [number, number, number][] = [[0, -3, 17], [1.5, -13, 12], [-1, -21, 7.5]];
+      for (const [cx, cy, r] of coils) {
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, r, r * 0.62, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+      // The pointed twist on top.
+      ctx.beginPath();
+      ctx.moveTo(-4, -24);
+      ctx.quadraticCurveTo(-2, -33, 2, -30);
+      ctx.quadraticCurveTo(4, -27, 3.5, -23);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      // Highlight, so it reads as glossy rather than as a brown rock.
+      ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(-5, -6, 7, 3.5, -0.3, Math.PI * 0.9, Math.PI * 1.7);
+      ctx.stroke();
+
+      // The stink: a slow green haze rising off it plus two wavy stink
+      // lines — the classic cartoon "this smells" cue.
+      for (let i = 0; i < 3; i++) {
+        const cycle = ((t * 0.45 + i * 0.33) % 1);
+        ctx.globalAlpha = fadeOut * (1 - cycle) * 0.35;
+        ctx.fillStyle = '#8bc34a';
+        ctx.beginPath();
+        ctx.ellipse(
+          Math.sin(t * 1.4 + i * 2) * 8, -30 - cycle * 44,
+          10 + cycle * 16, 7 + cycle * 12, 0, 0, Math.PI * 2,
+        );
+        ctx.fill();
+      }
+      ctx.globalAlpha = fadeOut * 0.5;
+      ctx.strokeStyle = '#7cb342';
+      ctx.lineWidth = 1.8;
+      ctx.lineCap = 'round';
+      for (const sx of [-9, 9]) {
+        ctx.beginPath();
+        ctx.moveTo(sx, -26);
+        for (let k = 1; k <= 4; k++) {
+          ctx.lineTo(sx + Math.sin(t * 3 + k * 1.1 + sx) * 4, -26 - k * 9);
+        }
+        ctx.stroke();
+      }
+
+      // Flies orbiting above it — small dark bodies with flicking wings,
+      // each on its own tilted orbit so they never move as one block.
+      ctx.globalAlpha = fadeOut;
+      for (let i = 0; i < 4; i++) {
+        const a = t * (2.4 + i * 0.5) + i * 1.7;
+        const fx = Math.cos(a) * (14 + i * 3);
+        const fy = -30 + Math.sin(a * 1.3) * 9 - i * 3;
+        ctx.fillStyle = '#212121';
+        ctx.beginPath();
+        ctx.ellipse(fx, fy, 2.1, 1.5, a, 0, Math.PI * 2);
+        ctx.fill();
+        const flap = Math.sin(t * 30 + i * 3) * 2;
+        ctx.strokeStyle = 'rgba(220,230,240,0.75)';
+        ctx.lineWidth = 0.9;
+        ctx.beginPath();
+        ctx.moveTo(fx - 1, fy - 1);
+        ctx.lineTo(fx - 3, fy - 1 - flap);
+        ctx.moveTo(fx + 1, fy - 1);
+        ctx.lineTo(fx + 3, fy - 1 - flap);
+        ctx.stroke();
+      }
+      ctx.restore();
     } else if (h.kind === 'confetti') {
       // A small tumbling colored square — reads as a party-cannon shot,
       // not a hard projectile.
