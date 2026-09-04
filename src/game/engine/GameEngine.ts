@@ -23,7 +23,7 @@ import { renderFighter } from './renderFighter';
 import { renderBoss } from './renderBoss';
 import { applyDefense, resolveHit, scoreForHit } from './combatMath';
 
-export type GamePhase = 'ready' | 'bossIntro' | 'playing' | 'levelWon' | 'gameOver' | 'paused' | 'arenaTransition';
+export type GamePhase = 'ready' | 'bossIntro' | 'playing' | 'levelWon' | 'gameOver' | 'arenaTransition';
 
 export interface HudState {
   phase: GamePhase;
@@ -370,7 +370,8 @@ export class GameEngine {
   private lightningCooldownMs = 5000;
 
   phase: GamePhase = 'ready';
-  private phaseBeforePause: GamePhase = 'ready';
+  /** True while a menu/overlay is up — see setPaused. */
+  private overlayPaused = false;
   bossIntroTimerMs = 0;
   readyTimerMs = 0;
   levelWonHandled = false;
@@ -557,14 +558,21 @@ export class GameEngine {
     cancelAnimationFrame(this.rafId);
   }
 
+  /** Freezes the fight while a menu or overlay is up. This deliberately no
+   * longer overwrites `phase` (it used to swap it for 'paused' and swap it
+   * back on resume): `phase` is real game state that the rest of the code
+   * — proceedToNextLevel, the action guards, the level-won handling —
+   * reads and acts on, and stashing it away behind an overlay meant a
+   * caller that legitimately advanced the game while the shop was open
+   * silently did nothing, and the restore afterwards then put the stale
+   * phase back. A separate flag freezes the simulation without lying
+   * about where the game actually is. */
   setPaused(paused: boolean): void {
-    if (paused) {
-      if (this.phase === 'gameOver' || this.phase === 'paused') return;
-      this.phaseBeforePause = this.phase;
-      this.phase = 'paused';
-    } else if (this.phase === 'paused') {
-      this.phase = this.phaseBeforePause;
-    }
+    this.overlayPaused = paused;
+  }
+
+  get isPaused(): boolean {
+    return this.overlayPaused;
   }
 
   // ---------------------------------------------------------------------
@@ -1733,6 +1741,16 @@ export class GameEngine {
     const dtMs = rawDtMs * timeScale;
     const dtSec = dtMs / 1000;
 
+    if (this.overlayPaused) {
+      // Frozen behind an overlay: no simulation at all, but the scene is
+      // still drawn (the overlays are translucent and the canvas below
+      // them must not go stale or blank) and the HUD still emitted, so
+      // React keeps rendering the same frozen state.
+      this.render(dtSec);
+      this.emitHud(rawDtMs);
+      return;
+    }
+
     if (this.phase === 'ready') {
       this.updateReadyPhase(rawDtMs, dtSec);
     } else if (this.phase === 'bossIntro') {
@@ -2030,7 +2048,82 @@ export class GameEngine {
       }
     }
 
+    // Cornered. The melee/ninja/defensive behaviours all back off after
+    // swinging, and against the arena wall that meant walking into it
+    // forever: stepPhysics clamps the position, so the fighter kept its
+    // "retreating" velocity while going absolutely nowhere — it stopped
+    // closing distance and became a free target standing in the corner.
+    //
+    // Two things get it out. Correcting the blocked retreat (further down)
+    // handles the common case, but not on its own: plenty of AI branches
+    // return moveDir 0 while cornered — hesitating, waiting out a
+    // cooldown, blocking, trading blows toe-to-toe — and the fighter then
+    // just stands there instead. So a tally of time spent parked against
+    // the wall backs it up, and once that passes the threshold the fighter
+    // commits to walking back out into the open, whatever the AI wanted.
+    const wallMargin = 34;
+    const againstLeftWall = enemy.body.pos.x <= this.layout.minX + wallMargin;
+    const againstRightWall = enemy.body.pos.x >= this.layout.maxX - wallMargin;
+
+    if (enemy.wallEscapeMs > 0) {
+      enemy.wallEscapeMs -= dtMs;
+      const dir = enemy.wallEscapeDir as 1 | -1;
+      // Ends early once genuinely back out in the open, so the enemy does
+      // not march off to the far side of the arena for the full duration.
+      const clear = dir > 0
+        ? enemy.body.pos.x > this.layout.minX + wallMargin * 3
+        : enemy.body.pos.x < this.layout.maxX - wallMargin * 3;
+      if (enemy.wallEscapeMs > 0 && !clear) {
+        enemy.body.vel.x = dir * enemy.effectiveMoveSpeed();
+        enemy.facing = dir;
+        if (enemy.body.grounded) enemy.setAnim('run');
+        enemy.isBlocking = false;
+        void dtSec;
+        return;
+      }
+      enemy.wallEscapeMs = 0;
+      enemy.wallEscapeDir = 0;
+      enemy.wallStuckMs = 0;
+    }
+
+    const swingInFlight = (enemy.anim === 'attack' || enemy.anim === 'kick')
+      && !(enemy as Fighter & { pendingHitApplied?: boolean }).pendingHitApplied;
+    // Net displacement over a window, not per frame: being stuck does not
+    // always look like standing still. A fighter whose retreat is blocked
+    // on one frame and unblocked on the next vibrates on the spot at full
+    // running speed — frame to frame it is "moving", over a third of a
+    // second it has gone nowhere at all. Both look identical to the player
+    // and both are the bug.
+    enemy.wallSampleMs += dtMs;
+    if (enemy.wallSampleMs >= 300) {
+      const moved = Math.abs(enemy.body.pos.x - enemy.lastWallCheckX);
+      enemy.lastWallCheckX = enemy.body.pos.x;
+      const parked = (againstLeftWall || againstRightWall) && enemy.body.grounded && moved < 12;
+      enemy.wallStuckMs = parked ? enemy.wallStuckMs + enemy.wallSampleMs : 0;
+      enemy.wallSampleMs = 0;
+      // A swing already in flight is left alone — cutting it off mid-punch
+      // would read as the attack being cancelled — but it does not clear
+      // the tally either, so the escape simply happens a beat later.
+      if (enemy.wallStuckMs >= 900 && !swingInFlight) {
+        enemy.wallStuckMs = 0;
+        enemy.wallEscapeDir = againstLeftWall ? 1 : -1;
+        enemy.wallEscapeMs = 900;
+      }
+    }
+
     const decision = decideAiAction(enemy, this.player);
+    if ((decision.moveDir < 0 && againstLeftWall) || (decision.moveDir > 0 && againstRightWall)) {
+      // A retreat into the wall is not a move, so it becomes a short walk
+      // back out into the open instead (fighters do not collide, so it
+      // simply passes the player). Committed rather than flipped for this
+      // one frame: unflipped, the moment it is a hair clear of the wall the
+      // behaviour turns it straight back around, which is what produced the
+      // vibrating-in-the-corner enemy in the first place.
+      enemy.wallEscapeDir = againstLeftWall ? 1 : -1;
+      enemy.wallEscapeMs = 420;
+      decision.moveDir = enemy.wallEscapeDir;
+      if (enemy.attackCooldownRemainingMs <= 0) decision.wantsAttack = true;
+    }
     if (decision.moveDir !== 0) {
       enemy.body.vel.x = decision.moveDir * enemy.effectiveMoveSpeed();
       enemy.facing = decision.moveDir;

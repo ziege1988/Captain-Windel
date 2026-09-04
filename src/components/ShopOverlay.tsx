@@ -6,10 +6,10 @@ import { ScreenHeader } from './ScreenHeader';
 
 interface Props {
   /** The player's single currently-held special weapon slot (run-scoped) —
-   * `save.pendingSpecialWeapon` from the main menu, `engine.player.hasSpecialWeaponId`
-   * mid-run. Buying a new one while one is already held is blocked rather
-   * than silently replacing it, so a purchase is never wasted on a slot
-   * that's about to be overwritten. */
+   * `save.pendingSpecialWeapon` from the main menu,
+   * `engine.player.hasSpecialWeaponId` mid-run. Only used to label the
+   * buttons: the one already held cannot be bought again, and any other
+   * purchase swaps it out. */
   heldWeaponId: SpecialWeaponId | null;
   /** Called once a purchase actually goes through — the caller decides where
    * the bought weapon id is stored (pendingSpecialWeapon vs. the live
@@ -39,8 +39,12 @@ export function ShopOverlay({
   const unlocked = useAppStore((s) => s.save.unlockedSpecialWeapons);
   const purchaseSpecialWeapon = useAppStore((s) => s.purchaseSpecialWeapon);
 
+  // Unlocked means buyable. Holding a weapon used to disable every single
+  // buy button, which read as "you have to use up / buy things in a set
+  // order before the next one is available" — buying a different one now
+  // simply swaps what is in the slot, and the button says so.
   const buy = (id: SpecialWeaponId) => {
-    if (heldWeaponId) return;
+    if (id === heldWeaponId) return;
     if (!purchaseSpecialWeapon(id)) return;
     audio.play('shopBuy');
     onPurchased(id);
@@ -51,7 +55,8 @@ export function ShopOverlay({
       {SPECIAL_WEAPON_LIST.map((w) => {
         const isUnlocked = unlocked.includes(w.id);
         const canAfford = coins >= w.price;
-        const disabled = !isUnlocked || !!heldWeaponId || !canAfford;
+        const isHeld = heldWeaponId === w.id;
+        const disabled = !isUnlocked || !canAfford || isHeld;
         return (
           <div
             key={w.id}
@@ -71,7 +76,7 @@ export function ShopOverlay({
               onClick={() => buy(w.id)}
               style={{ padding: '8px 12px', fontSize: 12.5, minHeight: 40, opacity: disabled ? 0.5 : 1, whiteSpace: 'nowrap', flexShrink: 0 }}
             >
-              🪙 {w.price}
+              {isHeld ? 'DABEI' : heldWeaponId ? `🪙 ${w.price} · TAUSCH` : `🪙 ${w.price}`}
             </button>
           </div>
         );
@@ -84,8 +89,8 @@ export function ShopOverlay({
       <p style={{ opacity: 0.8, margin: '0 0 8px', fontStyle: 'italic', color: '#fff' }}>{overlaySubtitle}</p>
       <p style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#ffd54f' }}>🪙 {coins}</p>
       {heldWeaponId && (
-        <p style={{ fontSize: 12, opacity: 0.85, color: '#ffab91', marginTop: 6, maxWidth: 340 }}>
-          Erst {SPECIAL_WEAPONS[heldWeaponId].icon} {SPECIAL_WEAPONS[heldWeaponId].name} einsetzen, bevor du Neues kaufst.
+        <p style={{ fontSize: 12, opacity: 0.85, color: '#ffcc80', marginTop: 6, maxWidth: 340 }}>
+          Dabei: {SPECIAL_WEAPONS[heldWeaponId].icon} {SPECIAL_WEAPONS[heldWeaponId].name}. Ein Kauf tauscht sie aus.
         </p>
       )}
     </div>

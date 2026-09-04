@@ -78,13 +78,20 @@ export function TouchControls({
 
       {/* Right cluster: combat */}
       <div style={rightClusterStyle}>
+        {/* Labels have to fit INSIDE the button. "AUSWEICHEN" is about
+            twice the width of a 58px circle and "SCHLAG (Klopapier)" far
+            wider than its own, so both used to spill out of the button and
+            off the right edge of the screen — the button looked like it was
+            hanging off the display. Short words only; the equipped weapon
+            is named on its own line above the attack button instead. */}
         <div style={comboRowStyle}>
           <TouchButton label="BLOCK" size={58} onDown={() => engine.blockStart()} onUp={() => engine.blockEnd()} />
-          <TouchButton label="AUSWEICHEN" size={58} onDown={() => engine.dodge()} />
+          <TouchButton label="↺ ROLLE" size={58} onDown={() => engine.dodge()} />
         </div>
+        <div style={weaponLabelStyle}>{weaponName}</div>
         <div style={comboRowStyle}>
           <TouchButton label="TRITT" size={62} onDown={() => engine.kick()} />
-          <TouchButton label={`SCHLAG\n(${weaponName})`} size={78} primary onDown={() => engine.attack()} />
+          <TouchButton label="SCHLAG" size={86} primary onDown={() => engine.attack()} />
         </div>
         <div style={comboRowStyle}>
           {hasBanana && (
@@ -189,6 +196,10 @@ function TouchButton({
         lineHeight: 1.1,
         touchAction: 'none',
         opacity: dimmed ? 0.45 : 1,
+        // A label that does not fit is clipped to the button rather than
+        // spilling across the arena and off the edge of the screen.
+        overflow: 'hidden',
+        padding: 2,
       }}
     >
       {label}
@@ -213,7 +224,14 @@ const rightClusterStyle: CSSProperties = {
 };
 
 const dpadRowStyle: CSSProperties = { display: 'flex', gap: 10 };
-const comboRowStyle: CSSProperties = { display: 'flex', gap: 8 };
+const comboRowStyle: CSSProperties = { display: 'flex', gap: 8, alignItems: 'center' };
+// The equipped weapon still has to be readable, it just cannot live inside
+// a 78px circle — it sits above the attack button as its own caption.
+const weaponLabelStyle: CSSProperties = {
+  fontSize: 11, fontWeight: 700, color: '#ffe082', textAlign: 'right', width: '100%',
+  textShadow: '0 1px 3px rgba(0,0,0,0.9)', marginBottom: -2, letterSpacing: 0.2,
+  maxWidth: 168, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+};
 
 // Section 1 (polish pass): superpowers used to float dead-center over the
 // arena, right on top of the fighters' animations. Anchored to the left

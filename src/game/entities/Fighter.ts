@@ -105,6 +105,21 @@ export class Fighter {
    * relative position makes the enemy jitter in place when the player is
    * standing directly underneath it. */
   platformExitDir: -1 | 0 | 1 = 0;
+  /** How long the AI has been pressed up against an arena wall without
+   * getting anywhere. Once it passes the threshold the engine commits the
+   * fighter to walking back out (see wallEscapeMs), so a cornered enemy
+   * never becomes a stationary punching bag. */
+  wallStuckMs = 0;
+  /** Remaining time on that committed walk out of the corner, and which
+   * way it goes. Committed rather than re-decided per frame for the same
+   * reason as platformExitDir. */
+  wallEscapeMs = 0;
+  wallEscapeDir: -1 | 0 | 1 = 0;
+  /** Position at the last wall check and how long ago that was, so "not
+   * getting anywhere" is an actual measurement over a window rather than a
+   * guess from the animation or a single frame's velocity. */
+  lastWallCheckX = 0;
+  wallSampleMs = 0;
   // One-time bonus weapon: stork drops a diaper bomb on a chosen target.
   hasStorkBonusWeapon = false;
   // Persistent-progression pass: the single held shop-bought special

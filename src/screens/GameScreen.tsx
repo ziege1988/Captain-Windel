@@ -31,6 +31,11 @@ export function GameScreen() {
   const [stage, setStage] = useState<Stage>(save.tutorialSeen ? 'playing' : 'tutorial');
   const wasLevelWon = useRef(false);
   const autoAdvanceTimeout = useRef<number | null>(null);
+  // When 'levelWon' was first seen, for the stall watchdog below.
+  const stalledWonSince = useRef<number | null>(null);
+  // The engine callback is created once at mount, so it cannot read `stage`
+  // directly without capturing its initial value forever.
+  const stageRef = useRef<Stage>('playing');
   // Persistent-progression pass: where to go once the shop overlay closes —
   // back to the pause menu it was opened from, or onward through the normal
   // post-victory flow (upgrade screen / next level) when it was auto-offered
@@ -97,6 +102,23 @@ export function GameScreen() {
           }
         }
       }
+      // Watchdog. 'levelWon' is a transient state that something is always
+      // supposed to move on from — an overlay, or the timer above. If none
+      // of them does (a dropped timer, a transition missed while paused),
+      // the level never ends, every button no-ops because the actions all
+      // require phase === 'playing', and the game looks hung. Rather than
+      // trust every path, this notices the state has stalled and moves on.
+      // The shop/upgrade/pause overlays legitimately hold the game here for
+      // as long as the player wants, so only an unattended stall counts.
+      if (h.phase === 'levelWon' && stageRef.current === 'playing') {
+        if (stalledWonSince.current == null) stalledWonSince.current = performance.now();
+        else if (performance.now() - stalledWonSince.current > 6000 && engine.phase === 'levelWon') {
+          stalledWonSince.current = null;
+          engine.proceedToNextLevel();
+        }
+      } else {
+        stalledWonSince.current = null;
+      }
       if (h.phase === 'gameOver' && h.gameOverSummary) {
         finishRun({
           score: h.gameOverSummary.score,
@@ -131,6 +153,17 @@ export function GameScreen() {
   }, []);
 
   const engine = engineRef.current;
+
+  // The engine used to keep running full speed behind the shop, upgrade and
+  // campaign-complete overlays: coins kept ticking in, timers kept counting
+  // and the fight carried on under a menu the player could not see past.
+  // Anything that is not 'playing' is a menu, so the engine stops for it.
+  useEffect(() => {
+    stageRef.current = stage;
+    const e = engineRef.current;
+    if (!e) return;
+    e.setPaused(stage !== 'playing');
+  }, [stage]);
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', background: '#000', overflow: 'hidden' }}>
