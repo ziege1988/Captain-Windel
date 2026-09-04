@@ -51,8 +51,18 @@ export function Hud({ hud, onPause }: Props) {
 
         <div style={{ display: 'flex', justifyContent: 'center', gap: 18, marginTop: 6 }}>
           <div style={scoreChipStyle}>SCORE {hud.score.toLocaleString('de-DE')}</div>
-          {hud.combo > 1 && (
-            <div style={{ ...scoreChipStyle, color: '#ffd54f' }}>COMBO x{hud.combo}</div>
+          {hud.combo > 0 && (
+            // The streak drives the Multi-Schlag, so the chip says when the
+            // next hit is the one that triggers it — otherwise the payoff
+            // arrives with no warning and reads as random.
+            <div style={{
+              ...scoreChipStyle,
+              color: (hud.combo + 1) % 3 === 0 ? '#fff' : '#ffd54f',
+              background: (hud.combo + 1) % 3 === 0 ? 'rgba(230,81,0,0.85)' : scoreChipStyle.background,
+            }}
+            >
+              {(hud.combo + 1) % 3 === 0 ? 'MULTI BEREIT!' : `COMBO x${hud.combo}`}
+            </div>
           )}
           <div
             key={hud.coinFlash ? 'flash' : 'still'}

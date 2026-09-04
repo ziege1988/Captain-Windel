@@ -296,6 +296,15 @@ const PLATFORM_HEIGHT_ABOVE_GROUND = 145;
 // underneath is unchanged.
 const PLATFORM_WIDTH_FRACTION = 0.38; // of the whole arena width
 const JUMP_VELOCITY = -900;
+// Land this many hits in a row without taking one and the next one lands as
+// a Multi-Schlag: one big blow instead of a normal one. Repeats, so a clean
+// run of six gives two of them.
+const MULTI_STRIKE_HITS = 3;
+const MULTI_STRIKE_DAMAGE_MULT = 2.5;
+// Comic impact words. Punches get the loud ones, kicks the duller ones —
+// the same "a kick is the softer hit" reading as the visuals.
+const PUNCH_WORDS = ['POW!', 'BAM!', 'WUMM!', 'KRACH!', 'ZACK!'];
+const KICK_WORDS = ['TOCK!', 'PENG!', 'BUMS!'];
 
 /** The upper level: one wide island centred in the arena, with open sky and
  * open ground to either side of it. */
@@ -304,6 +313,23 @@ function buildPlatforms(worldWidth: number, groundY: number): Platform[] {
   return [
     { x: (worldWidth - width) / 2, width, y: groundY - PLATFORM_HEIGHT_ABOVE_GROUND },
   ];
+}
+
+/** A comic hit-impact: a starburst that punches out from the contact point,
+ * scaled by how hard the blow was. Held as world-space state (rather than
+ * fired as particles) so the whole burst — star, ring, speed lines — stays
+ * one readable shape instead of a scatter of dots. */
+interface ImpactBurst {
+  x: number;
+  y: number;
+  /** Negative while the burst is still waiting its turn — lets the
+   * multi-strike stagger three of them into a flurry from one call. */
+  ageMs: number;
+  totalMs: number;
+  power: number; // 0..1, drives size/spokes/line count
+  kind: 'punch' | 'kick' | 'multi';
+  color: string;
+  spin: number;
 }
 
 export class GameEngine {
@@ -367,6 +393,8 @@ export class GameEngine {
   // scheduled particle bursts — a real world-space effect, like the beam/
   // raven/stork effects below, rather than something attached to a fighter.
   private tornadoEffect: TornadoEffect | null = null;
+  // Comic impact bursts — one per landed hit, sized by what landed it.
+  private impacts: ImpactBurst[] = [];
   // Klopapier weapon: the paper ribbon flying from hand to target on a hit.
   private paperThrow: { fromX: number; fromY: number; toX: number; toY: number; ageMs: number; totalMs: number } | null = null;
   // Mosquito pass: current mosquito (if any) and a cooldown before the next
@@ -557,6 +585,7 @@ export class GameEngine {
     // reference point regardless of level) and gets collected within a
     // fraction of a second in the new level instead of vanishing.
     this.storkFlight = null;
+    this.combo = 0; // a new opponent starts a fresh hit streak
 
     // Section 1: start with clear daylight between the two fighters rather
     // than nearly toe-to-toe, so the opening seconds actually feel like a
@@ -1737,6 +1766,9 @@ export class GameEngine {
 
     player.updateTimers(dtMs);
     if (enemy) enemy.updateTimers(dtMs);
+    // The streak is "hits in a row", so it also lapses if the player simply
+    // stops attacking — comboTimerMs is refreshed by every landed hit.
+    if (this.combo > 0 && player.comboTimerMs <= 0) this.combo = 0;
 
     // --- player movement / actions ---
     if (player.canAct() && !player.isDead) {
@@ -1806,6 +1838,7 @@ export class GameEngine {
     this.updateTornadoEffect(dtMs);
     this.updatePaperThrow(dtMs);
     this.updateLightning(dtMs);
+    this.updateImpacts(dtMs);
     this.consumeWrapBreak(player);
     if (enemy) this.consumeWrapBreak(enemy);
     this.updateMosquitoSpawn(dtMs);
@@ -2227,8 +2260,18 @@ export class GameEngine {
     }
 
     const hit = resolveHit(attacker, weapon, isKick, perfect);
-    const dmg = applyDefense(hit.damage, defender.stats.defense);
+    // Multi-Schlag: every Nth consecutive landed hit, with nothing taken in
+    // between, comes down far harder than a normal blow. Decided here, up
+    // front, because it has to scale the damage that is about to be dealt.
+    const isMultiStrike = attacker.kind === 'player' && (this.combo + 1) % MULTI_STRIKE_HITS === 0;
+    const dmg = Math.round(
+      applyDefense(hit.damage, defender.stats.defense) * (isMultiStrike ? MULTI_STRIKE_DAMAGE_MULT : 1),
+    );
     this.dealDamageTo(defender, dmg, true, isKick);
+    // Taking a hit ends the player's run, which is what makes the streak
+    // worth protecting. (A successful block never reaches this line, so
+    // blocking preserves it.)
+    if (defender.kind === 'player') this.combo = 0;
     // A follow-up hit lands the real punish already — end the banana daze
     // (birds) now rather than have it linger under the hit/knockback pose.
     defender.dazedUntilMs = 0;
@@ -2288,13 +2331,52 @@ export class GameEngine {
       this.particles.burst({ x: defender.body.pos.x, y: this.layout.groundY - 60 }, 10, { color: '#7cb342', shape: 'drop', gravity: 700 });
     }
 
-    // impact particles + shake per section 9
-    const impactPos = { x: (attacker.body.pos.x + defender.body.pos.x) / 2, y: this.layout.groundY - 60 };
-    if (isKick) {
-      this.particles.burst({ x: defender.body.pos.x, y: this.layout.groundY - 4 }, 8, { color: '#c9b28a', shape: 'dust', gravity: 200, size: 5 });
+    // Impact. Every landed blow now punches out a comic starburst at the
+    // actual contact point rather than only scattering a few particles:
+    // a fist or weapon hits hard and gets the full flash, ring and speed
+    // lines, while a kick is deliberately the softer one — smaller, fewer
+    // points, no speed lines, and dust off the ground instead.
+    const contactX = defender.body.pos.x + Math.sign(attacker.body.pos.x - defender.body.pos.x) * defender.width * 0.35;
+    // Punches land around chest/head height, kicks low on the body — the
+    // burst appears where the blow actually connects.
+    const contactY = floorY(defender.body) - (isKick ? 52 : 76) * defender.scale;
+    const impactPos = { x: contactX, y: contactY };
+    const tierPower = hit.tier === 'critical' ? 1 : hit.tier === 'heavy' ? 0.75 : 0.5;
+
+    if (isMultiStrike) {
+      // Three staggered bursts walking into the target: one blow that reads
+      // as a flurry rather than a single bigger star.
+      for (let i = 0; i < 3; i++) {
+        this.spawnImpact(
+          contactX + (i - 1) * 24 * defender.scale,
+          contactY + (i - 1) * 15 * defender.scale,
+          'multi', 1, i * 80,
+        );
+      }
+      this.particles.burst(impactPos, 26, { color: '#ffd54f', shape: 'spark', size: 12, life: 0.55, maxLife: 0.55 });
+      this.particles.burst(impactPos, 14, { color: '#ffffff', shape: 'ring', size: 20, life: 0.5, maxLife: 0.5 });
+      audio.play('multiStrike');
+      this.spawnComicText('MULTI-SCHLAG!', contactX, contactY - 46, '#ffd54f');
+      this.showToast('MULTI-SCHLAG!', 1100);
+      this.shake.add(0.85);
+      this.hitStop.trigger(150);
+      audio.vibrate([20, 30, 50]);
+      applyKnockback(defender.body, dir, hit.knockback * 1.6, 0.5);
+      this.addScore(600);
+    } else if (isKick) {
+      this.spawnImpact(contactX, contactY, 'kick', tierPower * 0.8);
+      this.particles.burst({ x: defender.body.pos.x, y: floorY(defender.body) - 4 }, 8, { color: '#c9b28a', shape: 'dust', gravity: 200, size: 5 });
+      this.particles.burst(impactPos, 5, { color: '#e0d3b0', shape: 'spark', size: 5, life: 0.28, maxLife: 0.28 });
+      if (attacker.kind === 'player') {
+        this.spawnComicText(KICK_WORDS[Math.floor(Math.random() * KICK_WORDS.length)], contactX, contactY - 32, '#e0d3b0');
+      }
     } else {
+      this.spawnImpact(contactX, contactY, 'punch', tierPower);
       const count = hit.tier === 'critical' ? 16 : hit.tier === 'heavy' ? 10 : 5;
       this.particles.burst(impactPos, count, { color: hit.tier === 'critical' ? '#ffeb3b' : '#ffffff', shape: hit.tier === 'critical' ? 'ring' : 'spark', size: hit.tier === 'critical' ? 14 : 6 });
+      if (attacker.kind === 'player') {
+        this.spawnComicText(PUNCH_WORDS[Math.floor(Math.random() * PUNCH_WORDS.length)], contactX, contactY - 38, '#fff59d');
+      }
     }
 
     audio.play(hit.tier === 'critical' ? 'criticalHit' : hit.tier === 'heavy' ? 'heavyHit' : 'hit');
@@ -2306,10 +2388,12 @@ export class GameEngine {
       const flavor = this.weaponHitSound(weapon.id);
       if (flavor) audio.play(flavor);
     }
-    audio.vibrate(hit.tier === 'critical' ? [10, 20, 30] : hit.tier === 'heavy' ? 20 : 10);
-    this.shake.add(hit.tier === 'critical' ? 0.55 : hit.tier === 'heavy' ? 0.3 : 0.12);
-    if (hit.tier === 'critical') this.hitStop.trigger(BALANCE.hit.critHitStopMs);
-    else if (hit.tier === 'heavy') this.hitStop.trigger(BALANCE.hit.hitStopMs);
+    if (!isMultiStrike) {
+      audio.vibrate(hit.tier === 'critical' ? [10, 20, 30] : hit.tier === 'heavy' ? 20 : 10);
+      this.shake.add(hit.tier === 'critical' ? 0.55 : hit.tier === 'heavy' ? 0.3 : 0.12);
+      if (hit.tier === 'critical') this.hitStop.trigger(BALANCE.hit.critHitStopMs);
+      else if (hit.tier === 'heavy') this.hitStop.trigger(BALANCE.hit.hitStopMs);
+    }
   }
 
   private dealDamageTo(target: Fighter, amount: number, fromAttack: boolean, isKick = false): void {
@@ -2448,6 +2532,125 @@ export class GameEngine {
    * already applied on the hit (see applyHit / Fighter.applyWrap) — but it
    * is what sells "the character quickly wraps the enemy up" rather than
    * bands simply appearing out of nowhere. */
+  /** Queues a comic impact burst at the contact point. `delayMs` lets one
+   * call stagger several bursts into a flurry (see the multi-strike). */
+  private spawnImpact(
+    x: number,
+    y: number,
+    kind: ImpactBurst['kind'],
+    power: number,
+    delayMs = 0,
+  ): void {
+    this.impacts.push({
+      x, y,
+      ageMs: -delayMs,
+      totalMs: kind === 'multi' ? 520 : kind === 'punch' ? 340 : 280,
+      power: Math.max(0.2, Math.min(1, power)),
+      kind,
+      color: kind === 'multi' ? '#ffd54f' : kind === 'punch' ? '#fff59d' : '#e0d3b0',
+      spin: Math.random() * Math.PI,
+    });
+    if (this.impacts.length > 14) this.impacts.shift();
+  }
+
+  private updateImpacts(dtMs: number): void {
+    for (let i = this.impacts.length - 1; i >= 0; i--) {
+      const b = this.impacts[i];
+      b.ageMs += dtMs;
+      if (b.ageMs >= b.totalMs) this.impacts.splice(i, 1);
+    }
+  }
+
+  private renderImpacts(ctx: CanvasRenderingContext2D): void {
+    for (const b of this.impacts) {
+      if (b.ageMs < 0) continue; // still waiting its turn in a flurry
+      const t = Math.min(1, b.ageMs / b.totalMs);
+      // Snaps out fast, then eases — a hit reads as instant, not as
+      // something inflating slowly.
+      const grow = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+      const base = (b.kind === 'multi' ? 36 : b.kind === 'punch' ? 30 : 21) * (0.55 + b.power * 0.65);
+      const outer = base * (0.45 + grow * 0.95);
+      const inner = outer * (b.kind === 'kick' ? 0.55 : 0.42);
+      const spokes = b.kind === 'multi' ? 14 : b.kind === 'punch' ? 10 : 7;
+
+      ctx.save();
+      ctx.translate(b.x, b.y);
+      ctx.rotate(b.spin);
+      ctx.globalAlpha = fade;
+
+      // The star itself: a jagged comic-book impact flash, bright in the
+      // middle and coloured at the points.
+      const star = ctx.createRadialGradient(0, 0, 1, 0, 0, outer);
+      star.addColorStop(0, '#ffffff');
+      star.addColorStop(0.55, b.color);
+      star.addColorStop(1, b.kind === 'multi' ? '#ff8f00' : b.color);
+      ctx.fillStyle = star;
+      // The multi-strike fires three overlapping stars; at full opacity they
+      // merge into one white blob that swallows both fighters, so its stars
+      // are translucent and the fight stays readable underneath.
+      if (b.kind === 'multi') ctx.globalAlpha = fade * 0.72;
+      ctx.strokeStyle = 'rgba(40,30,10,0.55)';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      for (let i = 0; i < spokes * 2; i++) {
+        const a = (i / (spokes * 2)) * Math.PI * 2;
+        // Alternating long/short points, each jittered a little so the
+        // flash is irregular rather than a tidy cog.
+        const wobble = 0.82 + ((i * 37) % 11) / 30;
+        const r = (i % 2 === 0 ? outer * wobble : inner);
+        const px = Math.cos(a) * r;
+        const py = Math.sin(a) * r;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Shockwave ring, expanding past the star and thinning out.
+      if (b.kind !== 'kick') {
+        ctx.globalAlpha = fade * 0.6;
+        ctx.strokeStyle = b.kind === 'multi' ? '#ffe082' : '#ffffff';
+        ctx.lineWidth = (b.kind === 'multi' ? 4 : 2.5) * fade;
+        ctx.beginPath();
+        ctx.arc(0, 0, outer * (1.15 + grow * 0.9), 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Speed lines radiating out of the impact — the classic comic
+      // "this landed hard" cue. Kicks get none; they are the soft hit.
+      if (b.kind !== 'kick') {
+        ctx.globalAlpha = fade * 0.85;
+        ctx.strokeStyle = b.kind === 'multi' ? '#fff8e1' : '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'round';
+        const lines = b.kind === 'multi' ? 10 : 6;
+        for (let i = 0; i < lines; i++) {
+          const a = (i / lines) * Math.PI * 2 + 0.2;
+          const from = outer * 1.05;
+          const to = from + base * (0.35 + grow * 0.8);
+          ctx.beginPath();
+          ctx.moveTo(Math.cos(a) * from, Math.sin(a) * from);
+          ctx.lineTo(Math.cos(a) * to, Math.sin(a) * to);
+          ctx.stroke();
+        }
+      }
+
+      // The multi-strike gets a second, much wider shockwave so it is
+      // unmistakably a bigger event than any single hit.
+      if (b.kind === 'multi') {
+        ctx.globalAlpha = fade * 0.5;
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 6 * fade;
+        ctx.beginPath();
+        ctx.arc(0, 0, base * (0.9 + grow * 2.4), 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+
   /** Thunderstorm bolts. A strike is aimed at a spot in the arena — often
    * right where a fighter is standing, sometimes just nearby — telegraphed
    * for a beat by a glowing patch of scorched ground, and then comes down.
@@ -3582,6 +3785,7 @@ export class GameEngine {
     this.renderTornadoEffect(ctx);
     this.renderPaperThrow(ctx);
     this.renderLightning(ctx);
+    this.renderImpacts(ctx);
     this.particles.render(ctx);
     this.renderComicTexts(ctx);
     ctx.restore();

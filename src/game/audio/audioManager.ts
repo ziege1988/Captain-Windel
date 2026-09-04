@@ -22,7 +22,10 @@ export type SoundId =
   | 'paperWrap' | 'paperTear'
   // Thunderstorm weather: the distant roll that warns a bolt is coming, and
   // the crack when it actually lands.
-  | 'thunderRumble' | 'thunderCrack';
+  | 'thunderRumble' | 'thunderCrack'
+  // The Multi-Schlag: a rising, heavier sting than any single hit, so the
+  // combo payoff is audible as well as visible.
+  | 'multiStrike';
 
 interface SoundSpec {
   wave: OscillatorType | 'noise';
@@ -109,6 +112,7 @@ const SOUND_SPECS: Record<SoundId, SoundSpec> = {
   paperTear: { wave: 'noise', freqStart: 2600, freqEnd: 900, durationMs: 260, volume: 0.3, attackMs: 3 },
   thunderRumble: { wave: 'noise', freqStart: 110, freqEnd: 45, durationMs: 900, volume: 0.3, attackMs: 120 },
   thunderCrack: { wave: 'noise', freqStart: 900, freqEnd: 40, durationMs: 620, volume: 0.6, attackMs: 2, punch: true },
+  multiStrike: { wave: 'sawtooth', freqStart: 180, freqEnd: 760, durationMs: 380, volume: 0.62, attackMs: 4, punch: true },
 };
 
 // Section 4/5/7 (polish pass): several distinct fart "personalities" —
