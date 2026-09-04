@@ -60,10 +60,14 @@ export function MainMenuScreen() {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', maxWidth: 360 }}>
-          <button className="big-button" style={primaryStyle} onClick={tap(startNewRun)}>SPIELEN</button>
+          <button className="big-button" style={canContinue ? { ...primaryStyle, ...secondaryPrimaryStyle } : primaryStyle} onClick={tap(startNewRun)}>
+            {canContinue ? 'NEU STARTEN (Level 1)' : 'SPIELEN'}
+          </button>
           {canContinue && (
-            <button className="big-button secondary" style={compactStyle} onClick={tap(continueRun)}>
-              WEITER (Level {save.highestLevelReached})
+            // Picks the run back up where it was left — quitting to the menu
+            // mid-run is not the same as abandoning it.
+            <button className="big-button" style={continueStyle} onClick={tap(continueRun)}>
+              ▶ WEITERSPIELEN (Level {save.highestLevelReached})
             </button>
           )}
           <div style={gridStyle}>
@@ -115,6 +119,21 @@ export function MainMenuScreen() {
 
 const primaryStyle: CSSProperties = { minHeight: 46, padding: '10px 20px', fontSize: '1.05rem' };
 const compactStyle: CSSProperties = { minHeight: 38, padding: '8px 16px', fontSize: '0.85rem' };
+// The continue button leads when there is a run to continue: it is the
+// action the player almost always wants coming back to the menu.
+const continueStyle: import('react').CSSProperties = {
+  padding: '13px 18px', fontSize: 16, fontWeight: 800,
+  background: 'linear-gradient(180deg,#66bb6a,#2e7d32)', color: '#f1f8e9',
+  border: '2px solid #a5d6a7',
+};
+// ...which demotes "start over" to a plain, unmissable-but-not-inviting
+// button, so a fresh start is never hit by accident on the way back in.
+const secondaryPrimaryStyle: import('react').CSSProperties = {
+  background: 'rgba(255,255,255,0.10)', color: '#e8e8e8',
+  border: '1px solid rgba(255,255,255,0.25)', fontSize: 13.5, padding: '10px 16px',
+  boxShadow: 'none',
+};
+
 const gridStyle: CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 };
 const gridButtonStyle: CSSProperties = { minHeight: 40, padding: '6px 8px', fontSize: '0.72rem', lineHeight: 1.2 };
 const confirmOverlayStyle: CSSProperties = {

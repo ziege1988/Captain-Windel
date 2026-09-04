@@ -5,7 +5,11 @@ export function GameOverScreen() {
   const summary = useAppStore((s) => s.lastRunSummary);
   const save = useAppStore((s) => s.save);
   const startNewRun = useAppStore((s) => s.startNewRun);
+  const continueRun = useAppStore((s) => s.continueRun);
   const setScreen = useAppStore((s) => s.setScreen);
+  // finishRun has already rewound highestLevelReached to the last boss
+  // checkpoint, so this is where carrying on actually resumes.
+  const resumeLevel = save.highestLevelReached;
 
   return (
     <div style={{
@@ -28,7 +32,17 @@ export function GameOverScreen() {
         </div>
       )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%', maxWidth: 320, marginTop: 8 }}>
-        <button className="big-button" onClick={startNewRun}>NOCHMAL SPIELEN</button>
+        {resumeLevel > 1 ? (
+          <>
+            <p style={{ margin: 0, fontSize: 13, opacity: 0.85 }}>
+              Du startest wieder bei Level {resumeLevel} — direkt nach dem letzten besiegten Boss.
+            </p>
+            <button className="big-button" onClick={continueRun}>WEITER AB LEVEL {resumeLevel}</button>
+            <button className="big-button secondary" onClick={startNewRun}>VON VORNE (Level 1)</button>
+          </>
+        ) : (
+          <button className="big-button" onClick={startNewRun}>NOCHMAL SPIELEN</button>
+        )}
         <button className="big-button secondary" onClick={() => setScreen('mainMenu')}>HAUPTMENÜ</button>
       </div>
     </div>

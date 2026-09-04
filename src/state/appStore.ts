@@ -36,6 +36,12 @@ interface AppState {
   startNewRun: () => void;
   continueRun: () => void;
   finishRun: (summary: RunSummary) => void;
+  /** Called as each level begins, so quitting to the main menu mid-run can
+   * be resumed from exactly where it was left. */
+  noteLevelStarted: (level: number) => void;
+  /** Called when a boss level is cleared: bosses are the checkpoints a lost
+   * run falls back to. */
+  setBossCheckpoint: (levelAfterBoss: number) => void;
   unlockWeapon: (id: WeaponId) => void;
   // Point 59: returns which superpower ids (if any) this kill newly
   // unlocked, so the caller (GameScreen) can show a real milestone
@@ -73,14 +79,39 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({ screen: 'game', startFromLevel: level, runId: s.runId + 1 }));
   },
 
-  // Section 10 (3-lives quality update): reaching this screen now only
-  // happens once every one of the player's 3 attempts is spent (see
-  // GameEngine.handlePlayerDefeated — losing a life with attempts left
-  // instead heals and retries the current level without ever touching the
-  // store). So a real Game Over now resets the run's progress — unlocked
-  // weapons/superpowers, the bonus-weapon milestones, kill count and
-  // campaign level — back to a fresh level-1 start, while permanent
-  // best-of-all-time stats (high score, best combo) are kept.
+  // highestLevelReached was declared and read by the main menu's continue
+  // button but never actually written anywhere as the player progressed, so
+  // the button never appeared and leaving to the menu silently threw the
+  // run away. Recorded here the moment each level begins.
+  noteLevelStarted: (level) => {
+    const save = get().save;
+    if (level <= save.highestLevelReached) return;
+    const next = { ...save, highestLevelReached: level };
+    saveSaveData(next);
+    set({ save: next });
+  },
+
+  setBossCheckpoint: (levelAfterBoss) => {
+    const save = get().save;
+    if (levelAfterBoss <= save.checkpointLevel) return;
+    const next = { ...save, checkpointLevel: levelAfterBoss };
+    saveSaveData(next);
+    set({ save: next });
+  },
+
+  // Reaching this screen only happens once all three of the player's
+  // attempts are spent (see GameEngine.handlePlayerDefeated — losing a life
+  // with attempts left instead heals and retries the current level without
+  // ever touching the store).
+  //
+  // A lost run no longer rewinds all the way to level 1. Bosses are the
+  // campaign's checkpoints, so it falls back to the level right after the
+  // last boss beaten — losing costs you the levels since that boss, not
+  // every boss fight you have already won. Weapons stay unlocked with it:
+  // resuming at, say, level 26 with nothing but fists is not a difficulty
+  // setting, it is a broken fight. Only the one-time bonus milestones from
+  // levels you are about to replay are cleared, so they can be earned
+  // again.
   finishRun: (summary) => {
     const save = { ...get().save };
     save.highScore = Math.max(save.highScore, summary.score);
@@ -88,11 +119,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (summary.chaosMode) {
       save.longestChaosRun = Math.max(save.longestChaosRun, summary.levelReached - 50);
     }
-    save.highestLevelReached = 1;
-    save.unlockedWeapons = ['fists'];
-    save.totalKills = 0;
-    save.bonusWeaponMilestonesClaimed = [];
-    save.storkBonusMilestonesClaimed = [];
+    const resumeAt = Math.max(1, save.checkpointLevel);
+    save.highestLevelReached = resumeAt;
+    save.bonusWeaponMilestonesClaimed = save.bonusWeaponMilestonesClaimed.filter((l) => l < resumeAt);
+    save.storkBonusMilestonesClaimed = save.storkBonusMilestonesClaimed.filter((l) => l < resumeAt);
     // Persistent-progression pass: deliberately NOT touched here — coins
     // and unlockedSpecialWeapons are the whole point of a permanent
     // progression layer that survives a lost run (see section 15/17 of the

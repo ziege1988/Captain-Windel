@@ -22,6 +22,8 @@ export function GameScreen() {
   const startFromLevel = useAppStore((s) => s.startFromLevel);
   const finishRun = useAppStore((s) => s.finishRun);
   const recordKill = useAppStore((s) => s.recordKill);
+  const noteLevelStarted = useAppStore((s) => s.noteLevelStarted);
+  const setBossCheckpoint = useAppStore((s) => s.setBossCheckpoint);
   const markTutorialSeen = useAppStore((s) => s.markTutorialSeen);
   const setScreen = useAppStore((s) => s.setScreen);
 
@@ -44,11 +46,19 @@ export function GameScreen() {
 
     const engine = new GameEngine(canvasRef.current, save, startFromLevel, (h) => {
       setHud(h);
+      // Record progress as it happens rather than only at the end of a run:
+      // this is what lets the main menu offer to carry on from where the
+      // player left off after they quit out mid-run.
+      if (!h.chaosMode) noteLevelStarted(h.level);
 
       if (h.phase === 'levelWon' && !wasLevelWon.current) {
         wasLevelWon.current = true;
         const finalBoss = engine.levelIndex === BALANCE.campaign.totalLevels && engine.isBossLevel;
         const newlyUnlocked = recordKill(engine.isBossLevel ? (engine.bossDefId ?? undefined) : undefined);
+        // Bosses are the campaign's checkpoints: beating one is what a
+        // later Game Over rewinds to, so the fallback point moves to the
+        // level right after this one.
+        if (engine.isBossLevel && !engine.chaosMode) setBossCheckpoint(engine.levelIndex + 1);
         // Point 59: a boss kill that unlocks a new permanent superpower is a
         // real milestone — replace the engine's own brief "SIEG!" toast with
         // a proper showcase naming what was just earned.

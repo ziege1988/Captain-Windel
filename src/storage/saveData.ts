@@ -7,6 +7,12 @@ const SAVE_KEY = 'captainWindel.save.v1';
 export interface SaveData {
   highScore: number;
   highestLevelReached: number; // highest unlocked/beaten level, campaign
+  // Where a Game Over drops you back to: the level right after the last
+  // boss you beat. Losing used to send you all the way back to level 1,
+  // which threw away up to five levels of progress and every boss fight
+  // leading up to them; bosses are the campaign's checkpoints, so that is
+  // what a lost run rewinds to.
+  checkpointLevel: number;
   highestCombo: number;
   bossesDefeated: string[];
   totalKills: number;
@@ -54,6 +60,7 @@ export function defaultSaveData(): SaveData {
   return {
     highScore: 0,
     highestLevelReached: 1,
+    checkpointLevel: 1,
     highestCombo: 0,
     bossesDefeated: [],
     totalKills: 0,
