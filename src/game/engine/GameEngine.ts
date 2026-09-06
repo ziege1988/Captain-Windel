@@ -3286,8 +3286,13 @@ export class GameEngine {
       target.deathPhase = 'falling';
       target.deathTimerMs = 500;
       target.setAnim(target.anim === 'attack' ? 'knockback' : target.anim, true);
+      // Whoever just went down cries out. Pitched by who they are — a
+      // boss is a big man falling over, a normal enemy a yelp — and the
+      // player's own is the lowest of the three, so in a fight you can
+      // tell by ear alone which of you it was without looking at the bars.
+      audio.playScream(target.kind === 'boss' ? 0.68 : target.kind === 'player' ? 0.92 : 1.18);
       if (target.kind === 'player') {
-        audio.play('gameOver');
+        audio.play('gameOver', { delaySec: 0.72 });
       } else {
         audio.vibrate(40);
       }
@@ -3555,7 +3560,11 @@ export class GameEngine {
         : this.cameraX + Math.random() * this.viewWidth;
       const x = Math.max(this.layout.minX, Math.min(this.layout.maxX, baseX + (Math.random() - 0.5) * 90));
       this.lightningStrike = { x, warnMs: 900, boltMs: 260, struck: false };
-      audio.play('thunderRumble');
+      // Only a distant grumble here — the crack and the roll both belong
+      // AFTER the bolt actually lands, which is the order thunder happens
+      // in and the order that makes the strike feel like a consequence
+      // rather than an announcement.
+      audio.play('thunderDistant');
       return;
     }
 
@@ -3565,7 +3574,10 @@ export class GameEngine {
         // The bolt lands.
         strike.struck = true;
         audio.play('thunderCrack');
-        audio.vibrate([30, 20, 60]);
+        // The roll follows the crack, a beat behind it, and keeps going
+        // long after the bolt itself has faded off the screen.
+        audio.play('thunderRumble', { delaySec: 0.32 });
+        audio.vibrate([30, 20, 60, 40, 200]);
         this.shake.add(0.7);
         this.hitStop.trigger(90);
         this.particles.burst({ x: strike.x, y: this.layout.groundY - 6 }, 22, {
