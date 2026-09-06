@@ -1,21 +1,11 @@
+import { useState } from 'react';
 import { useAppStore } from '../state/appStore';
-import { SPECIAL_WEAPON_LIST, SPECIAL_WEAPONS } from '../data/specialWeapons';
+import { SPECIAL_WEAPON_LIST, SPECIAL_WEAPONS, SPECIAL_WEAPON_SLOTS, stockKinds } from '../data/specialWeapons';
 import type { SpecialWeaponId } from '../game/types';
 import { audio } from '../game/audio/audioManager';
 import { ScreenHeader } from './ScreenHeader';
 
 interface Props {
-  /** The player's single currently-held special weapon slot (run-scoped) —
-   * `save.pendingSpecialWeapon` from the main menu,
-   * `engine.player.hasSpecialWeaponId` mid-run. Only used to label the
-   * buttons: the one already held cannot be bought again, and any other
-   * purchase swaps it out. */
-  heldWeaponId: SpecialWeaponId | null;
-  /** Called once a purchase actually goes through — the caller decides where
-   * the bought weapon id is stored (pendingSpecialWeapon vs. the live
-   * engine's player), since this component has no idea whether a run is
-   * active. */
-  onPurchased: (id: SpecialWeaponId) => void;
   onClose: () => void;
   /** 'screen': a standalone full menu screen (reached from the main menu,
    * no run in progress). 'overlay': a dismissible panel on top of the game
@@ -29,46 +19,81 @@ interface Props {
 }
 
 // Persistent-progression pass: the humorously-styled "Waffenkammer" shop —
-// the only way to spend permanently-collected coins on one-time special
-// weapons (see the brief's section 20: not a sober standard menu).
+// the only way to spend permanently-collected coins on special weapons
+// (see the brief's section 20: not a sober standard menu).
+//
+// Stock, not a slot: a weapon can be bought as many times as you can
+// afford it, and the count is what gets spent one use at a time. The only
+// limit is how many DIFFERENT kinds go into a fight — two — so a purchase
+// is a choice about what to bring rather than about what to give up.
 export function ShopOverlay({
-  heldWeaponId, onPurchased, onClose, variant,
+  onClose, variant,
   overlayTitle = '💰 WAFFENKAMMER', overlaySubtitle = 'Was darf’s heute sein?', closeLabel = 'Weiter',
 }: Props) {
   const coins = useAppStore((s) => s.save.coins);
   const unlocked = useAppStore((s) => s.save.unlockedSpecialWeapons);
+  const stock = useAppStore((s) => s.save.specialWeaponStock);
   const purchaseSpecialWeapon = useAppStore((s) => s.purchaseSpecialWeapon);
+  const discardSpecialWeapon = useAppStore((s) => s.discardSpecialWeapon);
+  const [notice, setNotice] = useState<string | null>(null);
 
-  // Unlocked means buyable. Holding a weapon used to disable every single
-  // buy button, which read as "you have to use up / buy things in a set
-  // order before the next one is available" — buying a different one now
-  // simply swaps what is in the slot, and the button says so.
+  const kinds = stockKinds(stock);
+  const slotsFull = kinds.length >= SPECIAL_WEAPON_SLOTS;
+
   const buy = (id: SpecialWeaponId) => {
-    if (id === heldWeaponId) return;
-    if (!purchaseSpecialWeapon(id)) return;
-    audio.play('shopBuy');
-    onPurchased(id);
+    const result = purchaseSpecialWeapon(id);
+    if (result === 'ok') {
+      audio.play('shopBuy');
+      setNotice(null);
+      return;
+    }
+    // A refused purchase says why. A disabled button that gives no reason
+    // is exactly what made the old shop read as "you must buy things in a
+    // fixed order".
+    setNotice(
+      result === 'noSlot'
+        ? `Du kannst nur ${SPECIAL_WEAPON_SLOTS} verschiedene mitnehmen. Wirf eine weg, um Platz zu machen.`
+        : result === 'tooPoor' ? 'Nicht genug Münzen.'
+          : 'Noch nicht freigeschaltet.',
+    );
   };
 
   const list = (
     <div className="scroll-y" style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 400, flex: 1, minHeight: 0 }}>
       {SPECIAL_WEAPON_LIST.map((w) => {
         const isUnlocked = unlocked.includes(w.id);
+        const owned = stock[w.id] ?? 0;
         const canAfford = coins >= w.price;
-        const isHeld = heldWeaponId === w.id;
-        const disabled = !isUnlocked || !canAfford || isHeld;
+        const blockedBySlots = owned === 0 && slotsFull;
+        const disabled = !isUnlocked || !canAfford || blockedBySlots;
         return (
           <div
             key={w.id}
             className="panel"
-            style={{ padding: 14, display: 'flex', alignItems: 'center', gap: 12, opacity: isUnlocked ? 1 : 0.45 }}
+            style={{
+              padding: 14, display: 'flex', alignItems: 'center', gap: 12,
+              opacity: isUnlocked ? 1 : 0.45,
+              border: owned > 0 ? '2px solid #ffd54f' : undefined,
+            }}
           >
-            <div style={{ fontSize: 30, width: 40, textAlign: 'center', flexShrink: 0 }}>{isUnlocked ? w.icon : '🔒'}</div>
+            <div style={{ fontSize: 30, width: 40, textAlign: 'center', flexShrink: 0, position: 'relative' }}>
+              {isUnlocked ? w.icon : '🔒'}
+              {owned > 0 && <span style={countBadgeStyle}>{owned}x</span>}
+            </div>
             <div style={{ flex: 1, minWidth: 0, color: '#fff' }}>
               <div style={{ fontWeight: 700, fontSize: 14 }}>{isUnlocked ? w.name : '???'}</div>
               <div style={{ fontSize: 11.5, opacity: 0.75, fontStyle: 'italic' }}>
                 {isUnlocked ? `„${w.tagline}“` : 'Noch nicht freigeschaltet'}
               </div>
+              {owned > 0 && (
+                <button
+                  className="big-button secondary"
+                  onClick={() => { audio.play('menuTap'); discardSpecialWeapon(w.id); setNotice(null); }}
+                  style={{ padding: '3px 8px', fontSize: 10.5, minHeight: 0, marginTop: 4 }}
+                >
+                  Wegwerfen
+                </button>
+              )}
             </div>
             <button
               className="big-button secondary"
@@ -76,7 +101,7 @@ export function ShopOverlay({
               onClick={() => buy(w.id)}
               style={{ padding: '8px 12px', fontSize: 12.5, minHeight: 40, opacity: disabled ? 0.5 : 1, whiteSpace: 'nowrap', flexShrink: 0 }}
             >
-              {isHeld ? 'DABEI' : heldWeaponId ? `🪙 ${w.price} · TAUSCH` : `🪙 ${w.price}`}
+              {blockedBySlots && isUnlocked ? 'PLATZ VOLL' : `🪙 ${w.price}${owned > 0 ? ' · MEHR' : ''}`}
             </button>
           </div>
         );
@@ -88,10 +113,14 @@ export function ShopOverlay({
     <div style={{ textAlign: 'center' }}>
       <p style={{ opacity: 0.8, margin: '0 0 8px', fontStyle: 'italic', color: '#fff' }}>{overlaySubtitle}</p>
       <p style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#ffd54f' }}>🪙 {coins}</p>
-      {heldWeaponId && (
-        <p style={{ fontSize: 12, opacity: 0.85, color: '#ffcc80', marginTop: 6, maxWidth: 340 }}>
-          Dabei: {SPECIAL_WEAPONS[heldWeaponId].icon} {SPECIAL_WEAPONS[heldWeaponId].name}. Ein Kauf tauscht sie aus.
-        </p>
+      <p style={{ fontSize: 12, opacity: 0.85, color: '#ffcc80', marginTop: 6, maxWidth: 340 }}>
+        {kinds.length === 0
+          ? `Kaufe so viele du willst — mit in den Kampf kommen ${SPECIAL_WEAPON_SLOTS} verschiedene.`
+          : `Dabei: ${kinds.map((id) => `${SPECIAL_WEAPONS[id].icon} ${stock[id]}x`).join('  ·  ')}`}
+        {slotsFull && ' — beide Plätze belegt. Von diesen zwei kannst du beliebig nachkaufen.'}
+      </p>
+      {notice && (
+        <p style={{ fontSize: 12, color: '#ff8a65', marginTop: 6, maxWidth: 340, fontWeight: 700 }}>{notice}</p>
       )}
     </div>
   );
@@ -128,3 +157,11 @@ export function ShopOverlay({
     </div>
   );
 }
+
+// Sits on the corner of the icon, the same place the combat button shows
+// it, so "3x" means the same thing in the shop and in the fight.
+const countBadgeStyle: import('react').CSSProperties = {
+  position: 'absolute', right: -6, bottom: -4,
+  fontSize: 11, fontWeight: 800, color: '#111', background: '#ffd54f',
+  borderRadius: 8, padding: '0 4px', lineHeight: '15px', minWidth: 18,
+};

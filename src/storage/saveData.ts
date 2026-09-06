@@ -1,6 +1,7 @@
 import type { CapeColorId, CharacterId, SpecialWeaponId, SuperpowerId, WeaponId } from '../game/types';
 import { storageGet, storageSet } from './storage';
 import { WEAPONS } from '../data/weapons';
+import { SPECIAL_WEAPONS } from '../data/specialWeapons';
 
 const SAVE_KEY = 'captainWindel.save.v1';
 
@@ -32,13 +33,17 @@ export interface SaveData {
   storkBonusMilestonesClaimed: number[];
   // Persistent-progression pass: coins and shop unlocks survive Game Over
   // (only shop purchases ever spend coins — see appStore.finishRun, which
-  // deliberately does NOT touch either of these two fields). pendingSpecialWeapon
-  // is the one exception that's saved-but-temporary: a weapon bought from the
-  // main-menu shop before a run exists yet, consumed into the player's single
-  // held slot the moment the next GameEngine starts (see its constructor).
+  // deliberately does NOT touch any of these fields).
   coins: number;
   unlockedSpecialWeapons: SpecialWeaponId[];
-  pendingSpecialWeapon: SpecialWeaponId | null;
+  // What is actually owned and how many of each. Replaces the old single
+  // "one weapon, held until used" slot: a weapon can now be bought over
+  // and over, and the count is what gets spent one at a time. At most
+  // SPECIAL_WEAPON_SLOTS distinct kinds are held at once (the shop
+  // enforces that) — the count per kind is unlimited. Bought stock is
+  // yours until you use it: a Game Over never takes it away, matching the
+  // rest of the permanent progression layer.
+  specialWeaponStock: Partial<Record<SpecialWeaponId, number>>;
   // Character-system overhaul: which hero is currently played, which are
   // permanently unlocked (coin purchase, see appStore.purchaseCharacter),
   // and the cosmetic-only cape recolor system (never affects stats).
@@ -72,7 +77,7 @@ export function defaultSaveData(): SaveData {
     storkBonusMilestonesClaimed: [],
     coins: 0,
     unlockedSpecialWeapons: [],
-    pendingSpecialWeapon: null,
+    specialWeaponStock: {},
     selectedCharacter: 'windelmann',
     unlockedCharacters: ['windelmann'],
     equippedCapeColor: 'red',
@@ -96,6 +101,7 @@ export function loadSaveData(): SaveData {
       ...defaultSaveData(), ...parsed, settings: { ...defaultSaveData().settings, ...parsed.settings },
     };
     merged.unlockedWeapons = migrateUnlockedWeapons(merged.unlockedWeapons);
+    merged.specialWeaponStock = migrateSpecialWeaponStock(parsed);
     return merged;
   } catch {
     return defaultSaveData();
@@ -116,6 +122,29 @@ function migrateUnlockedWeapons(ids: unknown): WeaponId[] {
     if (typeof id !== 'string') continue;
     if (!(id in WEAPONS)) continue;
     if (!out.includes(id as WeaponId)) out.push(id as WeaponId);
+  }
+  return out;
+}
+
+/** Brings a save forward to the counted stock. Older saves held at most
+ * one special weapon in `pendingSpecialWeapon`; that becomes a stock of
+ * one, so nobody loses something they paid for. Also drops entries for
+ * weapons that no longer exist and any count that is not a positive whole
+ * number, since a corrupted count would otherwise render as "NaNx" on the
+ * combat button. */
+function migrateSpecialWeaponStock(parsed: Record<string, unknown>): Partial<Record<SpecialWeaponId, number>> {
+  const out: Partial<Record<SpecialWeaponId, number>> = {};
+  const raw = parsed.specialWeaponStock;
+  if (raw && typeof raw === 'object') {
+    for (const [id, count] of Object.entries(raw as Record<string, unknown>)) {
+      if (!(id in SPECIAL_WEAPONS)) continue;
+      const n = Math.floor(Number(count));
+      if (Number.isFinite(n) && n > 0) out[id as SpecialWeaponId] = n;
+    }
+  }
+  const legacy = parsed.pendingSpecialWeapon;
+  if (typeof legacy === 'string' && legacy in SPECIAL_WEAPONS && !out[legacy as SpecialWeaponId]) {
+    out[legacy as SpecialWeaponId] = 1;
   }
   return out;
 }

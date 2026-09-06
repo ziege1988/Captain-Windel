@@ -9,7 +9,7 @@ import { BALANCE, enemyAggression, enemyRecoveryBonusMs, enemyTelegraphMs, ready
 import { WEAPONS } from '../../data/weapons';
 import { SUPERPOWERS } from '../../data/superpowers';
 import { abilityForCharacter } from '../../data/characterAbilities';
-import { SPECIAL_WEAPONS, SPECIAL_WEAPON_UNLOCK_LEVELS } from '../../data/specialWeapons';
+import { SPECIAL_WEAPONS, SPECIAL_WEAPON_SLOTS, SPECIAL_WEAPON_UNLOCK_LEVELS, stockKinds } from '../../data/specialWeapons';
 import type { SaveData } from '../../storage/saveData';
 import { useAppStore } from '../../state/appStore';
 import { decideAiAction } from '../ai/aiTypes';
@@ -51,7 +51,9 @@ export interface HudState {
   // Persistent-progression pass.
   coins: number;
   coinFlash: boolean;
-  specialWeaponId: SpecialWeaponId | null;
+  /** The special weapons carried into this fight, at most two kinds,
+   * each with how many are left. */
+  specialWeapons: { id: SpecialWeaponId; count: number }[];
   weaponId: WeaponId;
   bossIntroText: string;
   levelWonInfo: { score: number; leveledUp: boolean } | null;
@@ -193,6 +195,11 @@ interface ChickenRun {
   endX: number;
   y: number;
   effectFired: boolean;
+  /** Where it went off, and how long ago. The chicken itself stops being
+   * drawn the instant it detonates — what is left is the blast, which
+   * outlives the run and needs its own clock. */
+  blastX: number;
+  blastAgeMs: number;
 }
 
 // Visual-only timer for the bee swarm special weapon, layered on top of a
@@ -558,15 +565,6 @@ export class GameEngine {
     this.levelIndex = startLevel;
     this.chaosMode = startLevel > BALANCE.campaign.totalLevels;
     this.player = createPlayer(this.layout.minX + 120, this.layout.groundY, save);
-    // Persistent-progression pass: a special weapon bought from the
-    // main-menu shop (before this run existed) is stashed in
-    // save.pendingSpecialWeapon — consume it into the player's single held
-    // slot right as the run starts, then clear the pending flag so it isn't
-    // handed out again next run.
-    if (save.pendingSpecialWeapon) {
-      this.player.hasSpecialWeaponId = save.pendingSpecialWeapon;
-      useAppStore.getState().setPendingSpecialWeapon(null);
-    }
     this.resize();
     this.loadLevel(this.levelIndex);
   }
@@ -927,18 +925,21 @@ export class GameEngine {
     }, 700);
   }
 
-  // Persistent-progression pass: fires the player's single shop-bought
-  // special weapon (section 4/5/21 of the brief) — spectacular, one-time,
-  // consumed the instant it's used, never a substitute for the normal
-  // weapon/superpower loop. Dispatches to one of ten distinct effects; see
-  // fireSpecialWeapon below.
-  useSpecialWeapon(): void {
-    if (this.phase !== 'playing') return;
+  // Persistent-progression pass: fires one shop-bought special weapon
+  // (section 4/5/21 of the brief) — spectacular, consumed the instant it's
+  // used, never a substitute for the normal weapon/superpower loop.
+  // Dispatches to one of ten distinct effects; see fireSpecialWeapon below.
+  //
+  // The stock in the save is the single source of truth rather than
+  // something copied into the run and copied back: a purchase made from
+  // the pause menu is usable in the very next second without the engine
+  // being told about it, and a use is spent immediately, so quitting
+  // mid-fight can never duplicate or lose one.
+  useSpecialWeapon(id: SpecialWeaponId): void {
+    if (this.phase !== 'playing' || this.overlayPaused) return;
     if (!this.player.canAct()) return;
-    const id = this.player.hasSpecialWeaponId;
-    if (!id) return;
     if (!this.enemy || this.enemy.isDead) return;
-    this.player.hasSpecialWeaponId = null;
+    if (!useAppStore.getState().consumeSpecialWeapon(id)) return;
     this.player.setAnim('superpower', true);
     audio.play('specialActivate');
     this.fireSpecialWeapon(id);
@@ -971,6 +972,7 @@ export class GameEngine {
       elapsedMs: 0, totalMs: 900, dir,
       startX: this.player.body.pos.x, endX: enemy.body.pos.x,
       y: this.layout.groundY, effectFired: false,
+      blastX: 0, blastAgeMs: -1,
     };
     this.showToast('🐔 HÜHNER-ANGRIFF!', 900);
   }
@@ -1185,22 +1187,94 @@ export class GameEngine {
   private updateChickenRun(dtMs: number): void {
     const run = this.chickenRun;
     if (!run) return;
-    run.elapsedMs += dtMs;
-    const t = Math.min(1, run.elapsedMs / run.totalMs);
-    if (!run.effectFired && t >= 0.85 && this.enemy && !this.enemy.isDead) {
-      run.effectFired = true;
-      const x = lerp(run.startX, run.endX, t);
-      const dmg = Math.round(this.enemy.maxHealth * 0.1);
-      this.dealDamageTo(this.enemy, applyDefense(dmg, this.enemy.stats.defense), false);
-      applyKnockback(this.enemy.body, run.dir, 320, 0.4);
-      this.enemy.setAnim('knockback', true);
-      this.enemy.hitstunRemainingMs = 500;
-      this.particles.burst({ x, y: this.layout.groundY - 30 }, 14, { color: '#fff59d', shape: 'spark', size: 7, life: 0.4, maxLife: 0.4 });
-      this.spawnComicText('BAGAWK!', x, this.layout.groundY - 60, '#fff59d');
-      audio.play('hit');
-      this.addScore(300);
+    if (run.blastAgeMs >= 0) {
+      // Already gone off — only the blast is still running.
+      run.blastAgeMs += dtMs;
+      if (run.blastAgeMs > 620) this.chickenRun = null;
+      return;
     }
-    if (t >= 1) this.chickenRun = null;
+    const before = run.elapsedMs;
+    run.elapsedMs += dtMs;
+    // One tick of the ratchet per turn of the key, so what you hear and
+    // what you see are the same mechanism.
+    if (Math.floor(before / 130) !== Math.floor(run.elapsedMs / 130)) {
+      audio.play('clockworkWind', { gain: 0.8 });
+    }
+    const t = Math.min(1, run.elapsedMs / run.totalMs);
+    // It is a wind-up toy packed with something, so it does not ram and
+    // bounce off — it arrives and detonates. Going off on reaching the
+    // enemy OR at the end of its run means a chicken is never wasted
+    // because the enemy stepped aside at the last moment.
+    const x = lerp(run.startX, run.endX, t);
+    const reached = this.enemy && !this.enemy.isDead && Math.abs(x - this.enemy.body.pos.x) < 42;
+    if (!run.effectFired && (reached || t >= 1)) {
+      run.effectFired = true;
+      run.blastX = x;
+      run.blastAgeMs = 0;
+      this.detonateChicken(x, run.dir);
+    }
+    if (t >= 1 && run.blastAgeMs < 0) this.chickenRun = null;
+  }
+
+  /** The wumms. A wind-up chicken that has run all the way across an arena
+   * has earned more than a puff of sparks: a real blast with a fireball, a
+   * shockwave ring, and feathers going everywhere. */
+  private detonateChicken(x: number, dir: 1 | -1): void {
+    const groundY = this.layout.groundY;
+    audio.play('explosion');
+    audio.play('chickenPop', { delaySec: 0.02 });
+    audio.vibrate([50, 30, 120]);
+    this.shake.add(1.2);
+    this.hitStop.trigger(140);
+    this.spawnImpact(x, groundY - 50, 'multi', 1);
+    this.spawnComicText('BAGAWUMM!', x, groundY - 130, '#ffca28');
+
+    // Fireball.
+    for (let i = 0; i < 26; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = 120 + Math.random() * 320;
+      this.particles.burst({ x, y: groundY - 34 }, 1, {
+        color: Math.random() < 0.4 ? '#fff59d' : Math.random() < 0.7 ? '#ff9800' : '#e53935',
+        shape: 'cloud', size: 12 + Math.random() * 22,
+        life: 0.35 + Math.random() * 0.3, maxLife: 0.65,
+        vel: { x: Math.cos(a) * sp, y: Math.sin(a) * sp - 60 }, gravity: -40,
+      });
+    }
+    // Shockwave.
+    for (let i = 0; i < 3; i++) {
+      this.particles.burst({ x, y: groundY - 30 }, 1, {
+        color: '#fff8e1', shape: 'ring', size: 30 + i * 26,
+        life: 0.3 + i * 0.08, maxLife: 0.5, vel: { x: 0, y: 0 },
+      });
+    }
+    // Feathers — the part that makes it a chicken exploding rather than a
+    // barrel. They drift down long after the fire is gone.
+    for (let i = 0; i < 20; i++) {
+      const a = Math.random() * Math.PI * 2;
+      this.particles.burst({ x, y: groundY - 40 }, 1, {
+        color: Math.random() < 0.75 ? '#fdfdfd' : '#ffe0b2',
+        shape: 'drop', size: 5 + Math.random() * 4,
+        life: 1.3 + Math.random() * 0.9, maxLife: 2.2,
+        vel: { x: Math.cos(a) * (90 + Math.random() * 240), y: Math.sin(a) * 180 - 220 },
+        gravity: 90,
+      });
+    }
+    // Dirt at the crater.
+    this.particles.burst({ x, y: groundY - 2 }, 14, {
+      color: '#8d6e63', shape: 'dust', size: 10, life: 0.6, maxLife: 0.6,
+      vel: { x: 0, y: -220 }, gravity: 560,
+    });
+
+    const enemy = this.enemy;
+    if (!enemy || enemy.isDead) return;
+    if (Math.abs(enemy.body.pos.x - x) > 110) return;
+    // Worth the money now: roughly twice the old ram, and it throws them.
+    const dmg = Math.round(Math.max(26, enemy.maxHealth * 0.2));
+    this.dealDamageTo(enemy, applyDefense(dmg, enemy.stats.defense), false);
+    applyKnockback(enemy.body, dir, 420, 0.55);
+    enemy.setAnim('knockback', true);
+    enemy.hitstunRemainingMs = Math.max(enemy.hitstunRemainingMs, 700);
+    this.addScore(300);
   }
 
   private updateBeeSwarmEffect(dtMs: number): void {
@@ -4866,12 +4940,78 @@ export class GameEngine {
   private renderChickenRun(ctx: CanvasRenderingContext2D): void {
     const run = this.chickenRun;
     if (!run) return;
+    // Once it has gone off there is no chicken left to draw, only the
+    // flash — the particles carry the rest of the blast.
+    if (run.blastAgeMs >= 0) {
+      const k = run.blastAgeMs / 620;
+      if (k > 0.45) return;
+      const f = 1 - k / 0.45;
+      const groundY = this.layout.groundY;
+      ctx.save();
+      ctx.globalAlpha = f;
+      const glow = ctx.createRadialGradient(run.blastX, groundY - 40, 4, run.blastX, groundY - 40, 60 + (1 - f) * 90);
+      glow.addColorStop(0, 'rgba(255,255,220,0.95)');
+      glow.addColorStop(0.45, 'rgba(255,167,38,0.55)');
+      glow.addColorStop(1, 'rgba(229,57,53,0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(run.blastX, groundY - 40, 60 + (1 - f) * 90, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
+
     const t = Math.min(1, run.elapsedMs / run.totalMs);
     const x = lerp(run.startX, run.endX, t);
     const strideBob = Math.abs(Math.sin(run.elapsedMs / 40)) * 4;
     ctx.save();
     ctx.translate(x, this.layout.groundY - strideBob);
     ctx.scale(run.dir, 1);
+
+    // The wind-up key, behind the body so the body overlaps its shaft and
+    // it reads as sticking OUT of the chicken rather than sitting on top
+    // of it. It turns as the spring unwinds — the whole point of the
+    // thing, so it spins fast and visibly.
+    const keyAngle = -run.elapsedMs / 62;
+    // The shaft it turns on, from inside the body out to the key.
+    ctx.strokeStyle = '#607d8b';
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-8, -23);
+    ctx.lineTo(-22, -24);
+    ctx.stroke();
+
+    ctx.save();
+    ctx.translate(-22, -24);
+    ctx.rotate(keyAngle);
+    // Dark metal on purpose: a pale key against a white chicken is a key
+    // you cannot see, and the whole joke is that it is visibly a wind-up
+    // toy. Two wings drawn as filled loops rather than strokes, so it
+    // stays readable through every angle of the turn instead of
+    // disappearing to a line twice per revolution.
+    ctx.fillStyle = '#78909c';
+    ctx.strokeStyle = '#263238';
+    ctx.lineWidth = 2;
+    for (const side of [1, -1]) {
+      ctx.beginPath();
+      ctx.ellipse(side * 11, 0, 10, 5.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      // The hole through each wing — what makes it a key and not a bow tie.
+      ctx.beginPath();
+      ctx.ellipse(side * 12, 0, 5, 2.4, 0, 0, Math.PI * 2);
+      ctx.fillStyle = '#37474f';
+      ctx.fill();
+      ctx.fillStyle = '#78909c';
+    }
+    ctx.beginPath();
+    ctx.arc(0, 0, 4, 0, Math.PI * 2);
+    ctx.fillStyle = '#546e7a';
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
     ctx.fillStyle = '#ff6f00';
     ctx.beginPath();
     ctx.moveTo(-3, -6); ctx.lineTo(3, -6); ctx.lineTo(0, 2); ctx.closePath(); ctx.fill();
@@ -5297,7 +5437,12 @@ export class GameEngine {
       // would otherwise go stale the moment the first coin is collected.
       coins: useAppStore.getState().save.coins,
       coinFlash: this.coinFlashMs > 0,
-      specialWeaponId: this.player.hasSpecialWeaponId,
+      // Up to two kinds, each with what is left of it — read fresh from
+      // the store, which is where a mid-run purchase lands.
+      specialWeapons: (() => {
+        const st = useAppStore.getState().save.specialWeaponStock;
+        return stockKinds(st).slice(0, SPECIAL_WEAPON_SLOTS).map((id) => ({ id, count: st[id] ?? 0 }));
+      })(),
       weaponId: this.player.weaponId,
       bossIntroText: this.bossDefId ? BOSSES[this.bossDefId].introText : '',
       levelWonInfo: this.phase === 'levelWon' ? { score: this.score, leveledUp: true } : null,

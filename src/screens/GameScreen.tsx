@@ -9,6 +9,7 @@ import { CampaignCompleteOverlay } from '../components/CampaignCompleteOverlay';
 import { TutorialOverlay } from '../components/TutorialOverlay';
 import { ShopOverlay } from '../components/ShopOverlay';
 import { WEAPONS } from '../data/weapons';
+import { SPECIAL_WEAPON_SLOTS, stockKinds } from '../data/specialWeapons';
 import { SUPERPOWERS } from '../data/superpowers';
 import { BALANCE, shouldOfferUpgrade } from '../data/balance';
 import { audio } from '../game/audio/audioManager';
@@ -77,13 +78,15 @@ export function GameScreen() {
         } else {
           const nextStage: 'upgrade' | null = shouldOfferUpgrade(engine.levelIndex, engine.isBossLevel) ? 'upgrade' : null;
           // Persistent-progression pass (brief section 3/16): "möglicherweise
-          // automatisch nach einem Boss angeboten" — after a boss kill, if
-          // the player has coins to spend and an empty special-weapon slot,
-          // offer the shop right away (still fully skippable via "Weiter",
-          // so it never forces a purchase or blocks progress).
+          // automatisch nach einem Boss angeboten" — after a boss kill,
+          // offer the shop right away if there is anything to spend coins
+          // on and the player is not already carrying a full loadout
+          // (still fully skippable via "Weiter", so it never forces a
+          // purchase or blocks progress).
+          const shopSave = useAppStore.getState().save;
           const offerShop = engine.isBossLevel
-            && !engine.player.hasSpecialWeaponId
-            && useAppStore.getState().save.unlockedSpecialWeapons.length > 0;
+            && stockKinds(shopSave.specialWeaponStock).length < SPECIAL_WEAPON_SLOTS
+            && shopSave.unlockedSpecialWeapons.length > 0;
           if (offerShop) {
             shopFromPause.current = false;
             afterShopStage.current = nextStage;
@@ -188,7 +191,7 @@ export function GameScreen() {
             airSupportCooldownMs={hud.airSupportCooldownMs}
             bananaCooldownMs={hud.bananaCooldownMs}
             hasStorkBonusWeapon={hud.hasStorkBonusWeapon}
-            specialWeaponId={hud.specialWeaponId}
+            specialWeapons={hud.specialWeapons}
             characterAbility={hud.characterAbility}
           />
         </>
@@ -225,8 +228,6 @@ export function GameScreen() {
       {engine && stage === 'shop' && (
         <ShopOverlay
           variant="overlay"
-          heldWeaponId={engine.player.hasSpecialWeaponId}
-          onPurchased={(id) => { engine.player.hasSpecialWeaponId = id; }}
           onClose={() => {
             if (shopFromPause.current) {
               shopFromPause.current = false;

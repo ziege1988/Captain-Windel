@@ -52,6 +52,18 @@ export const SPECIAL_WEAPONS: Record<SpecialWeaponId, SpecialWeaponDef> = {
 
 export const SPECIAL_WEAPON_LIST = Object.values(SPECIAL_WEAPONS);
 
+/** How many DIFFERENT special weapons can be carried into a fight at once.
+ * The number of each is unlimited — buy five chickens if you want five
+ * chickens — but two kinds is the cap, so a fight still means choosing
+ * what to bring rather than carrying the whole armoury. Two is also what
+ * fits on the touch layout without crowding the attack buttons. */
+export const SPECIAL_WEAPON_SLOTS = 2;
+
+/** Distinct kinds currently owned. */
+export function stockKinds(stock: Partial<Record<SpecialWeaponId, number>>): SpecialWeaponId[] {
+  return (Object.keys(stock) as SpecialWeaponId[]).filter((id) => (stock[id] ?? 0) > 0);
+}
+
 // One special weapon unlocks per boss level, cheapest/simplest first —
 // mirrors the campaign's own 10 boss levels 1:1 so every boss kill has a
 // chance to feel like real, lasting progress even beyond that run's coins.

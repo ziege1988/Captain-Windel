@@ -17,7 +17,9 @@ interface Props {
   airSupportCooldownMs: number;
   bananaCooldownMs: number;
   hasStorkBonusWeapon: boolean;
-  specialWeaponId: SpecialWeaponId | null;
+  /** The special weapons carried into this fight — at most two kinds,
+   * each with how many are left. Empty while nothing is bought. */
+  specialWeapons: HudState['specialWeapons'];
   /** The current hero's signature ability. Never null — every character has
    * exactly one and it swaps with the character, so this button is a fixed
    * part of the layout rather than something that comes and goes. */
@@ -28,7 +30,7 @@ interface Props {
 // right thumb for combat actions. No control smaller than ~56px.
 export function TouchControls({
   engine, equippedSuperpowers, cooldowns, weaponName, hasBanana, hasBonusWeapon,
-  airSupportUnlocked, airSupportCooldownMs, bananaCooldownMs, hasStorkBonusWeapon, specialWeaponId,
+  airSupportUnlocked, airSupportCooldownMs, bananaCooldownMs, hasStorkBonusWeapon, specialWeapons,
   characterAbility,
 }: Props) {
   const activeDir = useRef<-1 | 0 | 1>(0);
@@ -134,20 +136,31 @@ export function TouchControls({
           )}
           <TouchButton label="⇄ WAFFE" size={50} onDown={() => engine.cycleWeapon()} />
         </div>
-        <SpecialWeaponButton specialWeaponId={specialWeaponId} onUse={() => engine.useSpecialWeapon()} />
+        {/* One button per kind carried, side by side, each spending from
+            its own count. Nothing bought means no buttons at all rather
+            than a permanent dead "Keine Sonderwaffe" bar taking up the
+            width of the whole cluster. */}
+        {specialWeapons.length > 0 && (
+          <div style={comboRowStyle}>
+            {specialWeapons.map((w) => (
+              <SpecialWeaponButton key={w.id} entry={w} onUse={() => engine.useSpecialWeapon(w.id)} />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 // Persistent-progression pass (brief section 5/18): a dedicated, clearly
-// distinguishable button for the player's single shop-bought special
-// weapon — its own icon and a pulsing gold glow when loaded, a plainly
-// disabled "LEER" state once used/empty, never confusable with the normal
-// attack/kick buttons above it.
-function SpecialWeaponButton({ specialWeaponId, onUse }: { specialWeaponId: SpecialWeaponId | null; onUse: () => void }) {
-  const loaded = !!specialWeaponId;
-  const def = specialWeaponId ? SPECIAL_WEAPONS[specialWeaponId] : null;
+// distinguishable button per shop-bought special weapon — its own icon
+// and a pulsing gold glow, never confusable with the normal attack/kick
+// buttons above it. The count sits in the corner of the icon, so how many
+// are left is readable at a glance mid-fight without doing arithmetic on
+// how many have been used.
+function SpecialWeaponButton({ entry, onUse }: { entry: HudState['specialWeapons'][number]; onUse: () => void }) {
+  const def = SPECIAL_WEAPONS[entry.id];
+  const loaded = entry.count > 0;
   return (
     <button
       onPointerDown={(e) => {
@@ -157,30 +170,35 @@ function SpecialWeaponButton({ specialWeaponId, onUse }: { specialWeaponId: Spec
       }}
       onContextMenu={(e) => e.preventDefault()}
       disabled={!loaded}
-      title={loaded ? `${def!.name} einsetzen` : 'Keine Sonderwaffe'}
+      title={`${def.name} einsetzen (${entry.count}x)`}
       style={{
-        width: 168, minHeight: 50, borderRadius: 14, marginTop: 2,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+        position: 'relative',
+        width: 80, minHeight: 50, borderRadius: 14,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 0,
         background: loaded ? 'linear-gradient(180deg,#ff8f00,#e65100)' : 'rgba(20,24,18,0.55)',
         color: loaded ? '#fff8e1' : 'rgba(255,255,255,0.5)',
         border: loaded ? '2px solid #ffd54f' : '2px solid rgba(255,255,255,0.15)',
         boxShadow: loaded ? '0 0 14px rgba(255,193,7,0.7)' : 'none',
         animation: loaded ? 'specialWeaponPulse 1.3s ease-in-out infinite' : 'none',
-        fontWeight: 800, fontSize: 12, touchAction: 'none', whiteSpace: 'nowrap',
-        opacity: loaded ? 1 : 0.55,
+        fontWeight: 800, fontSize: 9, touchAction: 'none', whiteSpace: 'nowrap',
+        opacity: loaded ? 1 : 0.45, overflow: 'visible', padding: 2,
       }}
     >
-      {loaded ? (
-        <>
-          <span style={{ fontSize: 18 }}>{def!.icon}</span>
-          <span>💥 SONDERWAFFE</span>
-        </>
-      ) : (
-        <span>Keine Sonderwaffe</span>
-      )}
+      <span style={{ fontSize: 20, lineHeight: 1 }}>{def.icon}</span>
+      <span style={{ letterSpacing: 0.3 }}>SONDER</span>
+      <span style={specialCountStyle}>{entry.count}x</span>
     </button>
   );
 }
+
+// Bottom-right corner of the button, over the icon — the same badge the
+// shop puts on its icons, so "3x" reads identically in both places.
+const specialCountStyle: CSSProperties = {
+  position: 'absolute', right: -5, top: -6,
+  fontSize: 11, fontWeight: 900, color: '#3e2723', background: '#ffd54f',
+  border: '1.5px solid rgba(0,0,0,0.35)',
+  borderRadius: 9, padding: '0 4px', lineHeight: '16px', minWidth: 20, textAlign: 'center',
+};
 
 /** The signature-ability button. Ready state gets the character's own
  * colour and a slow pulse so it reads as available at a glance; recharging

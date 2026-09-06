@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type { CapeColorId, CharacterId, SpecialWeaponId, SuperpowerId, WeaponId } from '../game/types';
 import { defaultSaveData, loadSaveData, saveSaveData, type SaveData } from '../storage/saveData';
 import { getUnlockedSuperpowers } from '../data/superpowers';
-import { SPECIAL_WEAPONS } from '../data/specialWeapons';
+import { SPECIAL_WEAPONS, SPECIAL_WEAPON_SLOTS, stockKinds } from '../data/specialWeapons';
 import { CAPE_COLORS, CHARACTERS } from '../data/characters';
 
 export type ScreenId =
@@ -54,8 +54,11 @@ interface AppState {
   claimStorkBonusMilestone: (level: number) => void;
   addCoins: (amount: number) => void;
   unlockSpecialWeapon: (id: SpecialWeaponId) => void;
-  purchaseSpecialWeapon: (id: SpecialWeaponId) => boolean;
-  setPendingSpecialWeapon: (id: SpecialWeaponId | null) => void;
+  /** 'ok' on success, otherwise why not — the shop shows the reason
+   * rather than a button that silently does nothing. */
+  purchaseSpecialWeapon: (id: SpecialWeaponId) => 'ok' | 'locked' | 'tooPoor' | 'noSlot';
+  consumeSpecialWeapon: (id: SpecialWeaponId) => boolean;
+  discardSpecialWeapon: (id: SpecialWeaponId) => void;
   selectCharacter: (id: CharacterId) => void;
   purchaseCharacter: (id: CharacterId) => boolean;
   equipCapeColor: (id: CapeColorId) => void;
@@ -241,28 +244,54 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ save });
   },
 
-  // The one and only way coins ever decrease. Returns whether the purchase
-  // went through (false if too poor or not yet unlocked) so the shop UI can
-  // react without duplicating the balance/unlock checks. Deliberately does
-  // NOT grant the weapon itself — the caller (ShopOverlay) does that, either
-  // into save.pendingSpecialWeapon (main menu, no run active yet) or
-  // directly into the live engine.player.hasSpecialWeaponId (pause menu,
-  // mid-run) — this store has no reference to a running GameEngine.
+  // The one and only way coins ever decrease, and now also the only place
+  // stock is granted — the two used to be split between the store and the
+  // shop component, which only worked while exactly one weapon could be
+  // held. Buying the same weapon again simply adds to its count; buying a
+  // kind you do not already own needs a free slot.
   purchaseSpecialWeapon: (id) => {
     const save = get().save;
     const def = SPECIAL_WEAPONS[id];
-    if (!save.unlockedSpecialWeapons.includes(id)) return false;
-    if (save.coins < def.price) return false;
-    const next = { ...save, coins: save.coins - def.price };
+    if (!save.unlockedSpecialWeapons.includes(id)) return 'locked';
+    const stock = save.specialWeaponStock;
+    const owned = stock[id] ?? 0;
+    if (owned === 0 && stockKinds(stock).length >= SPECIAL_WEAPON_SLOTS) return 'noSlot';
+    if (save.coins < def.price) return 'tooPoor';
+    const next = {
+      ...save,
+      coins: save.coins - def.price,
+      specialWeaponStock: { ...stock, [id]: owned + 1 },
+    };
+    saveSaveData(next);
+    set({ save: next });
+    return 'ok';
+  },
+
+  /** Spends one. Called by the engine the moment a weapon is actually
+   * fired — stock is the single source of truth, so nothing has to be
+   * copied into the run and copied back out again. */
+  consumeSpecialWeapon: (id) => {
+    const save = get().save;
+    const owned = save.specialWeaponStock[id] ?? 0;
+    if (owned <= 0) return false;
+    const stock = { ...save.specialWeaponStock };
+    if (owned <= 1) delete stock[id];
+    else stock[id] = owned - 1;
+    const next = { ...save, specialWeaponStock: stock };
     saveSaveData(next);
     set({ save: next });
     return true;
   },
 
-  setPendingSpecialWeapon: (id) => {
-    const save = { ...get().save, pendingSpecialWeapon: id };
-    saveSaveData(save);
-    set({ save });
+  /** Drops a whole kind, freeing its slot for a different weapon. */
+  discardSpecialWeapon: (id) => {
+    const save = get().save;
+    if (!(id in save.specialWeaponStock)) return;
+    const stock = { ...save.specialWeaponStock };
+    delete stock[id];
+    const next = { ...save, specialWeaponStock: stock };
+    saveSaveData(next);
+    set({ save: next });
   },
 
   // Character-system overhaul: switching only requires the character to

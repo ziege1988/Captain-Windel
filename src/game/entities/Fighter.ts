@@ -1,4 +1,4 @@
-import type { AnimState, CapeColorId, CharacterId, FacingDirection, SpecialWeaponId, StatBlock, StatModifiers, WeaponId } from '../types';
+import type { AnimState, CapeColorId, CharacterId, FacingDirection, StatBlock, StatModifiers, WeaponId } from '../types';
 import { applyModifiers, defaultModifiers } from '../types';
 import { createBody, type PhysicsBody } from '../physics/physics';
 import { usesTwoHands } from '../../data/weapons';
@@ -122,11 +122,6 @@ export class Fighter {
   wallSampleMs = 0;
   // One-time bonus weapon: stork drops a diaper bomb on a chosen target.
   hasStorkBonusWeapon = false;
-  // Persistent-progression pass: the single held shop-bought special
-  // weapon slot (player-only) — bought with permanent coins, run-scoped
-  // (lost, unspent, on Game Over), consumed the instant it's used. See
-  // GameEngine.useSpecialWeapon.
-  hasSpecialWeaponId: SpecialWeaponId | null = null;
   // Character-system overhaul: which of the four playable heroes this
   // fighter's rig/palette/hair/proportions should render as (player-only —
   // enemies/bosses leave this at the harmless default since renderFighter

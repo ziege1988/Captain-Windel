@@ -26,7 +26,7 @@ export type SoundId =
   | 'paperWrap' | 'paperTear'
   | 'thunderRumble' | 'thunderCrack' | 'thunderDistant'
   | 'multiStrike'
-  | 'poopPlop' | 'flyBuzz'
+  | 'poopPlop' | 'flyBuzz' | 'chickenPop' | 'clockworkWind'
   // --- character signature abilities ---------------------------------------
   | 'denturePull' | 'dentureSpit' | 'dentureThrow' | 'dentureHit' | 'dentureBonk'
   | 'rockChord' | 'shockwaveBoom'
@@ -298,6 +298,27 @@ const SOUND_SPECS: Record<SoundId, SoundSpec> = {
       n({ wave: 'sine', freq: 380, freqEnd: 110, durationMs: 160, gain: 0.8, attackMs: 2 }),
       n({ wave: 'noise', durationMs: 190, gain: 0.55, attackMs: 2, filter: { type: 'lowpass', freq: 1200, freqEnd: 150, q: 2.8 } }),
       n({ wave: 'sine', freq: 90, freqEnd: 55, durationMs: 240, gain: 0.4, attackMs: 6, delayMs: 40 }),
+    ],
+  },
+  // The clockwork chicken. Its spring unwinding while it runs — a dry
+  // ratchet, deliberately mechanical rather than animal, so you can hear
+  // that the thing running at you is a wind-up toy.
+  clockworkWind: {
+    volume: 0.3, variance: 0.08,
+    layers: [
+      n({ wave: 'noise', durationMs: 30, gain: 0.7, attackMs: 1, filter: { type: 'bandpass', freq: 3600, q: 5 } }),
+      n({ wave: 'square', freq: 900, freqEnd: 780, durationMs: 26, gain: 0.22, attackMs: 1, filter: { type: 'highpass', freq: 600 } }),
+    ],
+  },
+  // And what is left of it on detonation: an indignant squawk cut off
+  // mid-cluck by the blast, plus a shower of feathers.
+  chickenPop: {
+    volume: 0.55, variance: 0.14,
+    layers: [
+      n({ wave: 'sawtooth', freq: 900, freqEnd: 340, durationMs: 130, gain: 0.5, attackMs: 4, wobbleHz: 26, wobbleDepth: 120, filter: { type: 'bandpass', freq: 1500, q: 3 } }),
+      n({ wave: 'sawtooth', freq: 1250, freqEnd: 500, durationMs: 90, gain: 0.35, attackMs: 3, delayMs: 30, filter: { type: 'bandpass', freq: 2200, q: 4 } }),
+      // The feathers settling afterwards.
+      n({ wave: 'noise', durationMs: 620, gain: 0.28, attackMs: 40, delayMs: 160, filter: { type: 'highpass', freq: 3800 } }),
     ],
   },
   // --- character signature abilities ---------------------------------------
