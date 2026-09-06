@@ -26,7 +26,12 @@ export type SoundId =
   | 'paperWrap' | 'paperTear'
   | 'thunderRumble' | 'thunderCrack'
   | 'multiStrike'
-  | 'poopPlop' | 'flyBuzz';
+  | 'poopPlop' | 'flyBuzz'
+  // --- character signature abilities ---------------------------------------
+  | 'denturePull' | 'dentureThrow' | 'dentureHit' | 'dentureBonk'
+  | 'rockChord' | 'shockwaveBoom'
+  | 'stompCharge' | 'stompImpact'
+  | 'gasBlast';
 
 type Wave = OscillatorType | 'noise';
 
@@ -293,6 +298,111 @@ const SOUND_SPECS: Record<SoundId, SoundSpec> = {
       n({ wave: 'sine', freq: 380, freqEnd: 110, durationMs: 160, gain: 0.8, attackMs: 2 }),
       n({ wave: 'noise', durationMs: 190, gain: 0.55, attackMs: 2, filter: { type: 'lowpass', freq: 1200, freqEnd: 150, q: 2.8 } }),
       n({ wave: 'sine', freq: 90, freqEnd: 55, durationMs: 240, gain: 0.4, attackMs: 6, delayMs: 40 }),
+    ],
+  },
+  // --- character signature abilities ---------------------------------------
+  // Each of the four heroes has to be identifiable from the sound alone,
+  // so they are built from four different physical ideas rather than four
+  // pitches of the same noise: dry clacking bone, an amplified string, a
+  // huge mass hitting earth, and pressurised gas escaping.
+  //
+  // Grandpa. A suction-and-release pop as they come free, then wet.
+  denturePull: {
+    volume: 0.42, variance: 0.12,
+    layers: [
+      n({ wave: 'sine', freq: 220, freqEnd: 700, durationMs: 130, gain: 0.6, attackMs: 8 }),
+      n({ wave: 'noise', durationMs: 170, gain: 0.4, attackMs: 6, filter: { type: 'bandpass', freq: 700, freqEnd: 2200, q: 3.2 } }),
+      // The little wet "plop" of the seal breaking.
+      n({ wave: 'sine', freq: 640, freqEnd: 180, durationMs: 90, gain: 0.5, attackMs: 1, delayMs: 120 }),
+    ],
+  },
+  // The throw: a whoosh with the teeth already chattering inside it. The
+  // repeated short clacks are what make it a denture and not a rock.
+  dentureThrow: {
+    volume: 0.5, variance: 0.1,
+    layers: [
+      n({ wave: 'noise', durationMs: 230, gain: 0.55, attackMs: 10, filter: { type: 'bandpass', freq: 900, freqEnd: 2600, q: 1.1 } }),
+      n({ wave: 'square', freq: 1500, freqEnd: 1400, durationMs: 26, gain: 0.4, attackMs: 1, delayMs: 60, filter: { type: 'highpass', freq: 900 } }),
+      n({ wave: 'square', freq: 1750, freqEnd: 1600, durationMs: 24, gain: 0.36, attackMs: 1, delayMs: 130, filter: { type: 'highpass', freq: 900 } }),
+      n({ wave: 'square', freq: 1400, freqEnd: 1300, durationMs: 24, gain: 0.32, attackMs: 1, delayMs: 195, filter: { type: 'highpass', freq: 900 } }),
+    ],
+  },
+  // The bite landing: a hard bone-on-bone clack with a comedy boing on it.
+  dentureHit: {
+    volume: 0.6, variance: 0.09,
+    layers: [
+      n({ wave: 'square', freq: 1900, freqEnd: 900, durationMs: 45, gain: 0.6, attackMs: 1, filter: { type: 'highpass', freq: 700 } }),
+      n({ wave: 'triangle', freq: 420, freqEnd: 150, durationMs: 130, gain: 0.7, attackMs: 1 }),
+      n({ wave: 'noise', durationMs: 70, gain: 0.5, attackMs: 1, filter: { type: 'bandpass', freq: 2600, freqEnd: 1000, q: 1.4 } }),
+      // The bounce-off wobble.
+      n({ wave: 'sine', freq: 300, freqEnd: 520, durationMs: 220, gain: 0.3, attackMs: 6, delayMs: 50, wobbleHz: 14, wobbleDepth: 60 }),
+    ],
+  },
+  // And the punchline: they come back and hit him on the head. A dull
+  // knock on a skull, not a weapon impact.
+  dentureBonk: {
+    volume: 0.45, variance: 0.12,
+    layers: [
+      n({ wave: 'sine', freq: 300, freqEnd: 90, durationMs: 150, gain: 0.8, attackMs: 2 }),
+      n({ wave: 'square', freq: 1200, freqEnd: 700, durationMs: 35, gain: 0.3, attackMs: 1, filter: { type: 'highpass', freq: 600 } }),
+    ],
+  },
+  // Punk. A power chord: several detuned sawtooth strings at once through
+  // an opening filter, with the pick scrape in front of them.
+  rockChord: {
+    volume: 0.62, variance: 0.03,
+    layers: [
+      // The pick hitting the strings before any note sounds.
+      n({ wave: 'noise', durationMs: 70, gain: 0.5, attackMs: 1, filter: { type: 'bandpass', freq: 3200, freqEnd: 1400, q: 1.6 } }),
+      // Root, fifth and octave — a real chord, not one tone.
+      n({ wave: 'sawtooth', freq: 110, durationMs: 900, gain: 0.5, attackMs: 6, holdMs: 220, filter: { type: 'lowpass', freq: 900, freqEnd: 4200, q: 6 } }),
+      n({ wave: 'sawtooth', freq: 110, durationMs: 900, gain: 0.4, attackMs: 6, holdMs: 220, detune: 14 }),
+      n({ wave: 'sawtooth', freq: 165, durationMs: 860, gain: 0.4, attackMs: 8, holdMs: 200, detune: -9 }),
+      n({ wave: 'sawtooth', freq: 220, durationMs: 820, gain: 0.3, attackMs: 8, holdMs: 180, detune: 7 }),
+      // Amp buzz underneath, so it sounds plugged in.
+      n({ wave: 'square', freq: 55, durationMs: 900, gain: 0.22, attackMs: 20, holdMs: 260, filter: { type: 'lowpass', freq: 400 } }),
+    ],
+  },
+  // The wave itself leaving the amp: a low pressure thump that opens out.
+  shockwaveBoom: {
+    volume: 0.55, variance: 0.06,
+    layers: [
+      n({ wave: 'sine', freq: 180, freqEnd: 34, durationMs: 420, gain: 1, attackMs: 4 }),
+      n({ wave: 'noise', durationMs: 340, gain: 0.6, attackMs: 8, filter: { type: 'bandpass', freq: 300, freqEnd: 2400, q: 0.8 } }),
+      n({ wave: 'triangle', freq: 240, freqEnd: 70, durationMs: 300, gain: 0.35, attackMs: 6, delayMs: 30 }),
+    ],
+  },
+  // Bruno. The gather: a low creak of something heavy loading up.
+  stompCharge: {
+    volume: 0.35, variance: 0.08,
+    layers: [
+      n({ wave: 'sawtooth', freq: 60, freqEnd: 120, durationMs: 320, gain: 0.4, attackMs: 90, filter: { type: 'lowpass', freq: 260, freqEnd: 700, q: 3 } }),
+      n({ wave: 'noise', durationMs: 300, gain: 0.25, attackMs: 120, filter: { type: 'bandpass', freq: 200, freqEnd: 600, q: 2 } }),
+    ],
+  },
+  // The impact: earth, not metal. A deep body, a wide dirt spray, and a
+  // long rumble rolling away afterwards.
+  stompImpact: {
+    volume: 0.75, variance: 0.06,
+    layers: [
+      n({ wave: 'sine', freq: 120, freqEnd: 26, durationMs: 520, gain: 1, attackMs: 2 }),
+      n({ wave: 'triangle', freq: 190, freqEnd: 44, durationMs: 300, gain: 0.5, attackMs: 2 }),
+      n({ wave: 'noise', durationMs: 220, gain: 0.75, attackMs: 1, filter: { type: 'lowpass', freq: 2600, freqEnd: 260, q: 1.2 } }),
+      // The rumble travelling away through the ground.
+      n({ wave: 'noise', durationMs: 700, gain: 0.4, attackMs: 40, delayMs: 60, filter: { type: 'lowpass', freq: 180, freqEnd: 60, q: 1.4 } }),
+      n({ wave: 'sine', freq: 44, freqEnd: 30, durationMs: 800, gain: 0.45, attackMs: 50, delayMs: 60, wobbleHz: 5, wobbleDepth: 5 }),
+    ],
+  },
+  // Windelmann's signature is still a fart, but a pressurised one: the
+  // rasp is short and hard, followed by the blast of air actually moving.
+  gasBlast: {
+    volume: 0.6, variance: 0.14,
+    layers: [
+      n({ wave: 'sawtooth', freq: 95, freqEnd: 48, durationMs: 300, gain: 0.75, attackMs: 4, wobbleHz: 21, wobbleDepth: 26, filter: { type: 'lowpass', freq: 900, freqEnd: 300, q: 3 } }),
+      n({ wave: 'noise', durationMs: 340, gain: 0.6, attackMs: 3, filter: { type: 'bandpass', freq: 480, freqEnd: 1500, q: 1.3 } }),
+      // The escaping air, arriving just behind the rasp.
+      n({ wave: 'noise', durationMs: 520, gain: 0.5, attackMs: 30, delayMs: 90, filter: { type: 'lowpass', freq: 2400, freqEnd: 400, q: 0.8 } }),
+      n({ wave: 'sine', freq: 70, freqEnd: 34, durationMs: 420, gain: 0.5, attackMs: 8, delayMs: 60 }),
     ],
   },
   paperWrap: {
@@ -630,13 +740,18 @@ class AudioManager {
     osc.stop(t0 + durSec);
   }
 
-  play(id: SoundId): void {
+  /** `delaySec` starts the whole sound later on the audio clock rather than
+   * via a timer, so a sound that has to land on a specific animation frame
+   * (a chord under a strum, dentures coming loose partway through a reach)
+   * stays sample-accurate instead of drifting with the frame rate.
+   * `gain` scales it down for quieter repeats of the same sound. */
+  play(id: SoundId, opts: { delaySec?: number; gain?: number } = {}): void {
     if (!this.soundEnabled) return;
     const ctx = this.ensureContext();
     if (!ctx) return;
     try {
       const spec = SOUND_SPECS[id];
-      const now = ctx.currentTime;
+      const now = ctx.currentTime + Math.max(0, opts.delaySec ?? 0);
       // Per-play pitch variation. Without it a run of hits in a combo is
       // audibly the same sample over and over, which is most of what makes
       // synthesized game audio sound cheap.
@@ -644,7 +759,7 @@ class AudioManager {
       const pitchMult = 1 + (Math.random() * 2 - 1) * variance;
 
       const master = ctx.createGain();
-      master.gain.value = spec.volume;
+      master.gain.value = spec.volume * (opts.gain ?? 1);
       master.connect(this.out(ctx));
 
       for (const layer of spec.layers) this.playLayer(ctx, layer, now, master, pitchMult);

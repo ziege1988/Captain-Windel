@@ -189,6 +189,7 @@ export function GameScreen() {
             bananaCooldownMs={hud.bananaCooldownMs}
             hasStorkBonusWeapon={hud.hasStorkBonusWeapon}
             specialWeaponId={hud.specialWeaponId}
+            characterAbility={hud.characterAbility}
           />
         </>
       )}

@@ -99,6 +99,14 @@ button:active {
   50% { box-shadow: 0 0 20px rgba(255,193,7,0.95); }
 }
 
+/* The signature-ability button while it is ready. A slow breath rather
+   than a flash: it is up permanently between uses, so anything faster
+   would be a distraction during a fight. */
+@keyframes signatureReady {
+  0%, 100% { transform: scale(1); filter: brightness(1); }
+  50% { transform: scale(1.045); filter: brightness(1.18); }
+}
+
 @keyframes coinFlashPulse {
   0% { transform: scale(1); }
   40% { transform: scale(1.28); color: #fff59d; }

@@ -37,7 +37,16 @@ export type AnimState =
   // until the wrap tears open (see Fighter.applyWrap).
   | 'wrapped'
   // Turn away, deep squat — the Kacken superpower.
-  | 'poop';
+  | 'poop'
+  // --- character signature abilities (one per playable hero) ------------
+  // Grandpa reaches into his mouth, produces his dentures and throws them.
+  | 'dentures'
+  // Grandpa gets his own dentures back in the face on the return trip.
+  | 'annoyed'
+  // Punk drops into a rock stance and rips one enormous air-guitar chord.
+  | 'rockPose'
+  // Bruno hauls one leg up and slams it back into the ground.
+  | 'stomp';
 
 /** Base combat stats. All multiplicative modifiers from upgrades/equipment
  * apply on top of these at read-time (see StatModifiers). */
@@ -283,6 +292,40 @@ export interface CharacterDef {
   clothColor: string; // primary clothing accent
   clothColor2: string; // secondary clothing accent
   defaultCape: CapeColorId;
+}
+
+// ---------------------------------------------------------------------------
+// Character signature abilities
+// ---------------------------------------------------------------------------
+
+// Deliberately a separate system from SuperpowerId above, because the two
+// answer different questions. A superpower is something the player EARNS
+// (beat a boss, equip it in a slot, swap it out later) and every hero can
+// use every one of them. A signature ability is something a hero simply IS:
+// it comes with the character, cannot be unequipped, cannot be swapped, and
+// changes automatically the moment a different hero is selected. Grandpa
+// throwing his dentures is not a reward, it is who he is.
+export type CharacterAbilityId = 'pressureFart' | 'dentures' | 'rockWave' | 'groundStomp';
+
+export interface CharacterAbilityDef {
+  id: CharacterAbilityId;
+  characterId: CharacterId;
+  name: string;
+  /** Fits inside the combat button — one short word. */
+  shortLabel: string;
+  icon: string;
+  description: string;
+  /** One line on how this hero plays, for the character menu. */
+  playstyle: string;
+  cooldownMs: number;
+  /** Tuned so a normal enemy loses roughly a quarter to two-fifths of its
+   * health — clearly stronger than a weapon swing, never a one-shot, and
+   * against a boss (several times the health) a correspondingly smaller
+   * slice. See BALANCE.player.baseStats / the ENEMIES health table. */
+  damage: number;
+  /** Farthest the ability can reach; beyond this it simply misses. */
+  range: number;
+  color: string;
 }
 
 // A purely cosmetic cape recolor, unlocked permanently with coins — never

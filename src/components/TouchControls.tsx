@@ -1,5 +1,6 @@
 import { useRef, type CSSProperties } from 'react';
 import type { GameEngine } from '../game/engine/GameEngine';
+import type { HudState } from '../game/engine/GameEngine';
 import type { SpecialWeaponId, SuperpowerId } from '../game/types';
 import { SUPERPOWERS } from '../data/superpowers';
 import { SPECIAL_WEAPONS } from '../data/specialWeapons';
@@ -17,6 +18,10 @@ interface Props {
   bananaCooldownMs: number;
   hasStorkBonusWeapon: boolean;
   specialWeaponId: SpecialWeaponId | null;
+  /** The current hero's signature ability. Never null — every character has
+   * exactly one and it swaps with the character, so this button is a fixed
+   * part of the layout rather than something that comes and goes. */
+  characterAbility: HudState['characterAbility'];
 }
 
 // Section 7/40: large two-thumb touch layout — left thumb for movement,
@@ -24,6 +29,7 @@ interface Props {
 export function TouchControls({
   engine, equippedSuperpowers, cooldowns, weaponName, hasBanana, hasBonusWeapon,
   airSupportUnlocked, airSupportCooldownMs, bananaCooldownMs, hasStorkBonusWeapon, specialWeaponId,
+  characterAbility,
 }: Props) {
   const activeDir = useRef<-1 | 0 | 1>(0);
 
@@ -85,6 +91,15 @@ export function TouchControls({
             hanging off the display. Short words only; the equipped weapon
             is named on its own line above the attack button instead. */}
         <div style={comboRowStyle}>
+          {/* The hero's own signature ability. Deliberately its own button
+              rather than a fourth slot in the superpower row on the left:
+              those are earned and swappable, this one IS the character, so
+              it never moves, never empties and is always in the same place
+              no matter who is being played. It shares this row rather than
+              taking one of its own because the control stack already
+              reaches a long way up the screen, and pushing it further would
+              start covering the fight. */}
+          <SignatureButton ability={characterAbility} onUse={() => engine.useCharacterAbility()} />
           <TouchButton label="BLOCK" size={58} onDown={() => engine.blockStart()} onUp={() => engine.blockEnd()} />
           <TouchButton label="↺ ROLLE" size={58} onDown={() => engine.dodge()} />
         </div>
@@ -163,6 +178,36 @@ function SpecialWeaponButton({ specialWeaponId, onUse }: { specialWeaponId: Spec
       ) : (
         <span>Keine Sonderwaffe</span>
       )}
+    </button>
+  );
+}
+
+/** The signature-ability button. Ready state gets the character's own
+ * colour and a slow pulse so it reads as available at a glance; recharging
+ * greys it out and counts down, so a tap that does nothing is never a
+ * surprise. */
+function SignatureButton({ ability, onUse }: { ability: HudState['characterAbility']; onUse: () => void }) {
+  const { ready, cooldownMs, icon, label, color } = ability;
+  return (
+    <button
+      onPointerDown={(e) => { e.preventDefault(); audio.unlock(); if (ready) onUse(); }}
+      style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        gap: 1, width: 68, height: 58, borderRadius: 16,
+        background: ready
+          ? `linear-gradient(160deg, ${color}, rgba(0,0,0,0.45))`
+          : 'rgba(255,255,255,0.12)',
+        border: `2px solid ${ready ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.3)'}`,
+        boxShadow: ready ? `0 0 14px ${color}, 0 0 4px rgba(255,255,255,0.6) inset` : 'none',
+        color: '#fff', opacity: ready ? 1 : 0.55,
+        touchAction: 'none', overflow: 'hidden', padding: 2,
+        animation: ready ? 'signatureReady 1.6s ease-in-out infinite' : 'none',
+      }}
+    >
+      <span style={{ fontSize: 19, lineHeight: 1 }}>{icon}</span>
+      <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: 0.4, textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}>
+        {ready ? label : `${Math.ceil(cooldownMs / 1000)}s`}
+      </span>
     </button>
   );
 }

@@ -216,8 +216,23 @@ export class Fighter {
     );
   }
 
+  // The signature-ability animations. Each is a long, deliberate sequence
+  // (reach for the dentures, coil for the chord, haul the leg up) rather
+  // than a single frame, which makes them uniquely easy to interrupt: one
+  // stray jab from the enemy halfway through and the player sees the move
+  // vanish without ever happening, having already paid the cooldown.
+  private static readonly SIGNATURE_ANIMS: ReadonlySet<AnimState> =
+    new Set<AnimState>(['dentures', 'rockPose', 'stomp', 'fart']);
+
   setAnim(next: AnimState, force = false): void {
     if (this.anim === next && !force) return;
+    // Super armour, on purpose and only here. The fighter still TAKES the
+    // damage — the health bar drops, the hit lands, the attacker keeps
+    // their advantage — they simply do not flinch out of a signature move
+    // they have already committed to. Death, being knocked down and being
+    // tied up all still override it, so it never makes anyone untouchable.
+    const flinch = next === 'hit' || next === 'stagger' || next === 'knockback';
+    if (flinch && Fighter.SIGNATURE_ANIMS.has(this.anim) && !this.isDead) return;
     this.anim = next;
     this.animTimeMs = 0;
   }

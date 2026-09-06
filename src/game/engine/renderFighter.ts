@@ -277,6 +277,211 @@ function computePose(f: Fighter): Pose {
         bendFront: 0.16 + crouch * 0.02, bendBack: 0.16 + crouch * 0.02,
       };
     }
+    case 'dentures': {
+      // Grandpa's signature. The whole point is that you can SEE where the
+      // dentures come from, so the hand actually travels to the mouth,
+      // comes back down holding something, gets held up for a beat (that
+      // is the "look what I've got" moment), and only then winds up and
+      // throws. Cutting any of those beats turns it into a generic throw
+      // animation that could belong to anybody.
+      const reachEnd = 0.24;   // hand up to the mouth
+      const pullEnd = 0.46;    // pull them out, head follows the hand
+      const showEnd = 0.72;    // hold them up, grinning
+      const windEnd = 0.9;     // arm swings back behind the head
+      const throwEnd = 1.0;    // the whip forward
+      const totalEnd = 1.5;
+      let armX: number, armY: number, lean: number, headY: number, headX: number;
+      let backX = -6, backY = 26, legF = 8, legB = -8, hip = 0;
+      if (t < reachEnd) {
+        const p = t / reachEnd;
+        armX = lerp(6, 8, p); armY = lerp(26, -6, p);
+        lean = p * -0.06; headX = 0; headY = 0;
+      } else if (t < pullEnd) {
+        const p = (t - reachEnd) / (pullEnd - reachEnd);
+        // The pull itself: the hand drags forward and down away from the
+        // face, and the head leans after it as if it were stuck for a
+        // moment — the little tug that sells it.
+        armX = lerp(8, 22, p); armY = lerp(-6, 4, p);
+        lean = lerp(-0.06, 0.06, p);
+        headX = Math.sin(p * Math.PI) * 3; headY = Math.sin(p * Math.PI) * 2;
+      } else if (t < showEnd) {
+        const p = (t - pullEnd) / (showEnd - pullEnd);
+        // Held up and admired, with a small proud bob.
+        const bob = Math.sin(p * Math.PI * 2) * 1.5;
+        armX = 24; armY = -2 + bob;
+        lean = -0.08; headX = 2; headY = -1 + bob * 0.5;
+        backX = -10; backY = 22;
+      } else if (t < windEnd) {
+        const p = (t - showEnd) / (windEnd - showEnd);
+        // Wind-up: arm all the way back behind the head, weight onto the
+        // back foot, torso coiled away from the target.
+        armX = lerp(24, -22, p); armY = lerp(-2, -14, p);
+        lean = lerp(-0.08, -0.34, p);
+        headX = lerp(2, -3, p); headY = 0;
+        backX = lerp(-10, -4, p); backY = lerp(22, 28, p);
+        legF = lerp(8, 2, p); legB = lerp(-8, -16, p);
+      } else if (t < throwEnd) {
+        const p = (t - windEnd) / (throwEnd - windEnd);
+        // The whip. Fast and far — this is the frame the projectile leaves.
+        armX = lerp(-22, 34, p); armY = lerp(-14, 2, p);
+        lean = lerp(-0.34, 0.42, p);
+        headX = lerp(-3, 4, p); headY = lerp(0, 3, p);
+        backX = lerp(-4, -14, p); backY = lerp(28, 20, p);
+        legF = lerp(2, 16, p); legB = lerp(-16, -6, p);
+        hip = p * 3;
+      } else {
+        const p = Math.min(1, (t - throwEnd) / (totalEnd - throwEnd));
+        // Follow-through, then back to a guard — an old man who just threw
+        // something a lot harder than he should have.
+        armX = lerp(34, 6, p); armY = lerp(2, 26, p);
+        lean = lerp(0.42, 0, p);
+        headX = lerp(4, 0, p); headY = lerp(3, 0, p);
+        backX = lerp(-14, -6, p); backY = lerp(20, 26, p);
+        legF = lerp(16, 8, p); legB = lerp(-6, -8, p);
+        hip = 3 - p * 3;
+      }
+      return {
+        ...STAND, bodyLean: lean, hipY: hip, headOffsetX: headX, headOffsetY: headY,
+        armFrontX: armX, armFrontY: armY, armBackX: backX, armBackY: backY,
+        legFrontX: legF, legFrontY: 40, legBackX: legB, legBackY: 40,
+        capeKick: Math.max(0, lean) * 1.2,
+      };
+    }
+    case 'annoyed': {
+      // Hit in the back of the head by his own returning dentures. A snap
+      // forward, then a hand up rubbing the spot with a grumpy little
+      // head-shake — comic, not a real stagger.
+      const snapEnd = 0.18;
+      const totalEnd = 0.95;
+      if (t < snapEnd) {
+        const p = t / snapEnd;
+        return {
+          ...STAND, bodyLean: p * 0.3, headOffsetX: p * 5, headOffsetY: p * 3,
+          armFrontX: lerp(6, 2, p), armFrontY: lerp(26, 16, p),
+        };
+      }
+      const p = Math.min(1, (t - snapEnd) / (totalEnd - snapEnd));
+      const shake = Math.sin(p * Math.PI * 5) * 2.5 * (1 - p);
+      const rub = Math.sin(p * Math.PI * 3) * 3;
+      return {
+        ...STAND, bodyLean: lerp(0.3, 0, p),
+        headOffsetX: shake, headOffsetY: lerp(3, 0, p),
+        // Hand up behind the head, rubbing.
+        armFrontX: lerp(-4, 6, p * p), armFrontY: lerp(-10 + rub, 26, p * p),
+        armBackX: -8, armBackY: 24,
+      };
+    }
+    case 'rockPose': {
+      // Punk's signature. Not a punch and not a spell: a stance. Legs go
+      // wide and stay wide, the body coils back over the rear foot, and the
+      // strumming arm travels a long way so the chord reads as one huge
+      // physical motion rather than a button press.
+      const stanceEnd = 0.26;
+      const chargeEnd = 0.5;
+      const strumEnd = 0.62;
+      const holdEnd = 0.98;
+      const totalEnd = 1.35;
+      let lean: number, hip: number, frontX: number, frontY: number;
+      let backX: number, backY: number, headX: number, headY: number, spread: number;
+      if (t < stanceEnd) {
+        const p = t / stanceEnd;
+        // Dropping into the stance — knees bend, feet plant apart.
+        lean = p * 0.1; hip = p * 8; spread = p * 8;
+        frontX = lerp(6, 20, p); frontY = lerp(26, 12, p);   // fretting hand out front
+        backX = lerp(-6, -14, p); backY = lerp(26, 18, p);   // strumming hand back
+        headX = 0; headY = p * 2;
+      } else if (t < chargeEnd) {
+        const p = (t - stanceEnd) / (chargeEnd - stanceEnd);
+        // Coiling: weight back, strumming arm hauled up and behind, head
+        // dropping forward — the breath before the chord.
+        lean = lerp(0.1, -0.26, p); hip = lerp(8, 12, p); spread = 8 + p * 3;
+        frontX = lerp(20, 26, p); frontY = lerp(12, 6, p);
+        backX = lerp(-14, -26, p); backY = lerp(18, -12, p);
+        headX = lerp(0, -3, p); headY = lerp(2, 5, p);
+      } else if (t < strumEnd) {
+        const p = (t - chargeEnd) / (strumEnd - chargeEnd);
+        // THE CHORD. Arm smashes down through the strings, head thrown
+        // back, whole body arches open.
+        lean = lerp(-0.26, 0.18, p); hip = lerp(12, 4, p); spread = 11 + p * 3;
+        frontX = lerp(26, 22, p); frontY = lerp(6, 14, p);
+        backX = lerp(-26, 20, p); backY = lerp(-12, 26, p);
+        headX = lerp(-3, 2, p); headY = lerp(5, -6, p);
+      } else if (t < holdEnd) {
+        const p = (t - strumEnd) / (holdEnd - strumEnd);
+        // Held: horns up, chin high, vibrating with the note.
+        const buzz = Math.sin(p * Math.PI * 8) * (1 - p) * 2;
+        lean = 0.18 - p * 0.1; hip = 4; spread = 14;
+        frontX = 22 + buzz; frontY = 14;
+        backX = lerp(20, 8, p) + buzz; backY = lerp(26, -18, p);
+        headX = 2; headY = -6 + buzz * 0.5;
+      } else {
+        const p = Math.min(1, (t - holdEnd) / (totalEnd - holdEnd));
+        lean = lerp(0.08, 0, p); hip = lerp(4, 0, p); spread = lerp(14, 0, p);
+        frontX = lerp(22, 6, p); frontY = lerp(14, 26, p);
+        backX = lerp(8, -6, p); backY = lerp(-18, 26, p);
+        headX = lerp(2, 0, p); headY = lerp(-6, 0, p);
+      }
+      return {
+        ...STAND, bodyLean: lean, hipY: hip, shoulderDrop: hip * 0.7,
+        headOffsetX: headX, headOffsetY: headY,
+        armFrontX: frontX, armFrontY: frontY, armBackX: backX, armBackY: backY,
+        legFrontX: 8 + spread, legFrontY: 40 - hip * 0.6,
+        legBackX: -8 - spread, legBackY: 40 - hip * 0.6,
+        capeKick: 0.3 + spread * 0.05,
+        bendFront: 0.16 + hip * 0.02, bendBack: 0.16 + hip * 0.02,
+      };
+    }
+    case 'stomp': {
+      // Bruno's signature. All the weight is in the wind-up: he sinks,
+      // hauls one leg up to hip height with both arms overhead, and then
+      // drives everything down at once. The recoil crouch afterwards is
+      // what makes the ground look hard.
+      const gatherEnd = 0.22;
+      const raiseEnd = 0.46;
+      const slamEnd = 0.54;
+      const holdEnd = 0.86;
+      const totalEnd = 1.4;
+      let hip: number, lean: number, armX: number, armY: number;
+      let legFY: number, legFX: number, legBY: number;
+      if (t < gatherEnd) {
+        const p = t / gatherEnd;
+        hip = p * 10; lean = p * 0.14;
+        armX = lerp(6, -2, p); armY = lerp(26, 14, p);
+        legFX = 8; legFY = 40; legBY = 40;
+      } else if (t < raiseEnd) {
+        const p = (t - gatherEnd) / (raiseEnd - gatherEnd);
+        // Up: leg comes off the floor and folds in, arms go over the head.
+        hip = lerp(10, -6, p); lean = lerp(0.14, -0.16, p);
+        armX = lerp(-2, -10, p); armY = lerp(14, -22, p);
+        legFX = lerp(8, 4, p); legFY = lerp(40, 12, p); legBY = 40;
+      } else if (t < slamEnd) {
+        const p = (t - raiseEnd) / (slamEnd - raiseEnd);
+        // Down. Everything at once, and further down than standing height
+        // so the impact bottoms out rather than stopping neatly.
+        hip = lerp(-6, 18, p); lean = lerp(-0.16, 0.24, p);
+        armX = lerp(-10, 12, p); armY = lerp(-22, 24, p);
+        legFX = lerp(4, 14, p); legFY = lerp(12, 40, p); legBY = 40;
+      } else if (t < holdEnd) {
+        const p = (t - slamEnd) / (holdEnd - slamEnd);
+        // The recoil: a couple of hard shudders that decay.
+        const recoil = Math.cos(p * Math.PI * 3) * 3 * (1 - p);
+        hip = 18 + recoil; lean = 0.24 - p * 0.06;
+        armX = 12; armY = 24 + recoil;
+        legFX = 14; legFY = 40; legBY = 40;
+      } else {
+        const p = Math.min(1, (t - holdEnd) / (totalEnd - holdEnd));
+        hip = lerp(18, 0, p); lean = lerp(0.18, 0, p);
+        armX = lerp(12, 6, p); armY = lerp(24, 26, p);
+        legFX = lerp(14, 8, p); legFY = 40; legBY = 40;
+      }
+      return {
+        ...STAND, bodyLean: lean, hipY: hip, shoulderDrop: hip * 0.75,
+        armFrontX: armX, armFrontY: armY, armBackX: armX - 6, armBackY: armY + 2,
+        legFrontX: legFX, legFrontY: legFY, legBackX: -10, legBackY: legBY,
+        capeKick: Math.max(0, -hip * 0.05) + 0.2,
+        bendFront: 0.16 + Math.max(0, hip) * 0.02, bendBack: 0.16 + Math.max(0, hip) * 0.02,
+      };
+    }
     case 'superpower':
     case 'fart': {
       // Movement-quality pass 3 (root-cause fix): the previous version only
@@ -986,14 +1191,24 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   ctx.arc(shoulderX + headX, headY, headR, 0, Math.PI * 2);
   ctx.fill();
 
-  if (charDef) drawPlayerHair(ctx, charDef, shoulderX + headX, headY, headR, f.animTimeMs);
+  if (charDef) drawPlayerHair(ctx, charDef, shoulderX + headX, headY, headR, f.animTimeMs, hairCharge(f));
   drawHeadAccessories(ctx, f, shoulderX + headX, headY, headR);
   drawFace(ctx, f, shoulderX + headX, headY, headR, pose, dtSec);
   if (charDef) drawPlayerFaceExtras(ctx, charDef, shoulderX + headX, headY, headR, f.animTimeMs);
 
   // Front arm (in front of torso, holds weapon).
   drawArm(ctx, shoulderX, shoulderY, pose.armFrontX, pose.armFrontY, f, true, pose.bendFront, bw);
-  drawWeaponInHand(ctx, f, shoulderX + pose.armFrontX, shoulderY + pose.armFrontY, pose.armFrontX, pose.armFrontY);
+  // The dentures are held in that hand from the moment they leave his
+  // mouth until the moment they leave his hand — without this the throw
+  // would be an empty-handed mime and the player would never see what is
+  // actually being thrown. The equipped weapon is hidden for those frames
+  // (nobody throws dentures while still holding an axe in the same hand).
+  const denturesHeld = f.anim === 'dentures' && f.animTimeMs >= 240 && f.animTimeMs < 990;
+  if (denturesHeld) {
+    drawDentures(ctx, shoulderX + pose.armFrontX, shoulderY + pose.armFrontY, Math.atan2(pose.armFrontY, pose.armFrontX), 1, 0.25);
+  } else {
+    drawWeaponInHand(ctx, f, shoulderX + pose.armFrontX, shoulderY + pose.armFrontY, pose.armFrontX, pose.armFrontY);
+  }
 
   drawStatusOverlay(ctx, f, shoulderY, hipY);
 
@@ -1020,6 +1235,78 @@ function drawArm(
     ctx.stroke();
     ctx.restore();
   }
+}
+
+// A recognizable little cartoon denture: two pink gum arches with a row of
+// square white teeth between them, hinged at the back. Explicitly NOT a
+// white rectangle — at the size it flies across the arena the teeth are
+// what make it read as a set of dentures rather than a thrown brick, so
+// they are drawn individually with a gap between each one.
+// `bite` (0..1) closes the jaw, which is what makes it chatter in flight.
+export function drawDentures(
+  ctx: CanvasRenderingContext2D, x: number, y: number, angle: number, scale = 1, bite = 0.5,
+): void {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.scale(scale, scale);
+  ctx.lineJoin = 'round';
+
+  const gap = lerp(10, 2, Math.max(0, Math.min(1, bite)));
+  const halfW = 14;
+  const gumThick = 5;
+
+  // dir = 1 is the lower jaw (below the hinge, teeth pointing up),
+  // dir = -1 the upper jaw (above it, teeth pointing down).
+  const drawArch = (dir: 1 | -1) => {
+    const oy = dir * gap * 0.5;
+    // The gum as a real band with thickness — an outward curve and an
+    // inward one closed into a crescent — rather than a hairline, which is
+    // what made it read as a squiggle at arena distance.
+    ctx.fillStyle = dir > 0 ? '#e07070' : '#ec8181';
+    ctx.strokeStyle = '#7d2b2b';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(-halfW, oy);
+    ctx.quadraticCurveTo(0, oy + dir * 7, halfW, oy);
+    ctx.lineTo(halfW, oy - dir * gumThick);
+    ctx.quadraticCurveTo(0, oy + dir * (7 - gumThick * 1.6), -halfW, oy - dir * gumThick);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Teeth. Few and chunky on purpose: at the size this thing crosses the
+    // arena, a mouthful of hairlines is a smear, six blocks with dark gaps
+    // between them is unmistakably a set of teeth.
+    ctx.strokeStyle = '#4a4a44';
+    ctx.lineWidth = 1.1;
+    const count = 6;
+    for (let i = 0; i < count; i++) {
+      const p = (i + 0.5) / count;
+      const tx = lerp(-halfW + 2.4, halfW - 2.4, p);
+      const curve = Math.sin(p * Math.PI) * 5.5;
+      const ty = oy + dir * curve;
+      const th = 6.5 - Math.abs(p - 0.5) * 2.4;
+      // The front teeth are the big ones, so the middle of the row reads
+      // as the front of a mouth rather than a uniform comb.
+      const tw = 3.6 - Math.abs(p - 0.5) * 1.1;
+      ctx.fillStyle = i % 2 === 0 ? '#ffffff' : '#f4efe2';
+      ctx.beginPath();
+      ctx.roundRect(tx - tw / 2, dir > 0 ? ty - th : ty, tw, th, 1.3);
+      ctx.fill();
+      ctx.stroke();
+    }
+  };
+
+  drawArch(1);
+  drawArch(-1);
+
+  // The hinge at the back, so the two jaws visibly belong to one object.
+  ctx.fillStyle = 'rgba(120,45,45,0.9)';
+  ctx.beginPath();
+  ctx.ellipse(-halfW + 1, 0, 2.6, gap * 0.5 + 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 // Section (polish pass): weapons used to render as one undifferentiated
@@ -1655,7 +1942,19 @@ function drawPlayerClothing(ctx: CanvasRenderingContext2D, def: CharacterDef, sh
  * drawHeadAccessories, so it frames the head (crown/sides/back) without
  * ever covering the eyes or mouth (drawFace is always the last thing
  * drawn on top, per the section above this fixed for Windelmann). */
-function drawPlayerHair(ctx: CanvasRenderingContext2D, def: CharacterDef, hx: number, hy: number, r: number, animTimeMs: number): void {
+/** 0..1 — how far the hair is standing on end. Only the rock chord drives
+ * it: the mohawk rising is the visual tell that the chord is coming, so it
+ * ramps up through the wind-up and stays up while the note rings. */
+function hairCharge(f: Fighter): number {
+  if (f.anim !== 'rockPose') return 0;
+  const t = f.animTimeMs / 1000;
+  if (t < 0.26) return t / 0.26 * 0.35;
+  if (t < 0.5) return 0.35 + ((t - 0.26) / 0.24) * 0.65;
+  if (t < 0.98) return 1;
+  return Math.max(0, 1 - (t - 0.98) / 0.37);
+}
+
+function drawPlayerHair(ctx: CanvasRenderingContext2D, def: CharacterDef, hx: number, hy: number, r: number, animTimeMs: number, charge = 0): void {
   const t = animTimeMs / 1000;
   const gust = windGust(performance.now() / 1000);
   const jitter = Math.sin(t * 6) * 0.06 + gust * 0.22; // a little life during movement, plus the shared wind gust
@@ -1689,19 +1988,38 @@ function drawPlayerHair(ctx: CanvasRenderingContext2D, def: CharacterDef, hx: nu
     }
     case 'punk': {
       // A tall, jagged mohawk strip running front-to-back along the crown.
+      // `charge` is the rock chord standing it fully on end — the spikes
+      // grow, straighten out of their usual lean and start to crackle.
       const spikes = 5;
       ctx.beginPath();
       ctx.moveTo(hx - r * 0.55, hy - r * 0.7);
       for (let i = 0; i <= spikes; i++) {
         const p = i / spikes;
         const px = hx + lerp(-r * 0.55, r * 0.75, p);
-        const spikeH = r * (0.85 + (i % 2 === 0 ? 0.35 : 0) + jitter);
+        const buzz = charge > 0 ? Math.sin(t * 40 + i) * 0.12 * charge : 0;
+        const spikeH = r * (0.85 + (i % 2 === 0 ? 0.35 : 0) + jitter * (1 - charge) + charge * 1.1 + buzz);
         ctx.lineTo(px, hy - r * 0.7 - spikeH);
         ctx.lineTo(px + r * 0.12, hy - r * 0.7);
       }
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
+      if (charge > 0.5) {
+        // Static crackling off the tips once it is fully up.
+        ctx.save();
+        ctx.strokeStyle = `rgba(255,255,255,${(charge - 0.5) * 1.2})`;
+        ctx.lineWidth = 1.2;
+        for (let i = 0; i < 3; i++) {
+          const a = t * 9 + i * 2.1;
+          const bx = hx + Math.cos(a) * r * 0.7;
+          const by = hy - r * 1.9 - Math.abs(Math.sin(a)) * r * 0.4;
+          ctx.beginPath();
+          ctx.moveTo(bx, by);
+          ctx.lineTo(bx + Math.cos(a * 3) * 5, by - 4 - Math.abs(Math.sin(a * 2)) * 4);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
       break;
     }
     case 'brawler': {
@@ -1845,6 +2163,16 @@ function computeExpression(f: Fighter): Expression {
     case 'fart':
     case 'superpower':
       return { browAngle: 0.18, browRaise: 0.2, mouth: 'grin', eyeWiden: 0, lookY: 0 };
+    // The mischievous grin is half the joke of the dentures throw — you
+    // have to see that he knows exactly what he is about to do.
+    case 'dentures':
+      return { browAngle: 0.22, browRaise: 0.35, mouth: 'grin', eyeWiden: 0.15, lookY: 0 };
+    case 'annoyed':
+      return { browAngle: 0.45, browRaise: 0, mouth: 'worried', eyeWiden: 0, lookY: 0 };
+    case 'rockPose':
+      return { browAngle: 0.5, browRaise: 0, mouth: 'o', eyeWiden: 0.2, lookY: -0.4 };
+    case 'stomp':
+      return { browAngle: 0.55, browRaise: 0, mouth: 'firm', eyeWiden: 0, lookY: 0 };
     case 'taunt':
       return { browAngle: 0.12, browRaise: 0.15, mouth: 'grin', eyeWiden: 0, lookY: 0 };
     case 'fallen':

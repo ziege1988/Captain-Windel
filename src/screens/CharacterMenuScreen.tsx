@@ -3,6 +3,7 @@ import { useAppStore } from '../state/appStore';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { StickFigurePreview } from '../components/StickFigurePreview';
 import { CAPE_COLOR_LIST, CHARACTER_LIST } from '../data/characters';
+import { abilityForCharacter } from '../data/characterAbilities';
 import { audio } from '../game/audio/audioManager';
 
 // Character-system overhaul: "MEIN CHARAKTER" — switch between the four
@@ -40,6 +41,18 @@ export function CharacterMenuScreen() {
               <div style={{ fontWeight: 800, fontSize: 15 }}>{def.icon} {def.name}</div>
               <div style={{ fontSize: 11.5, opacity: 0.75, textAlign: 'center', minHeight: 30 }}>{def.tagline}</div>
               <div style={{ fontSize: 10.5, opacity: 0.6, fontStyle: 'italic' }}>{def.personality}</div>
+              {/* The signature ability comes WITH the hero — there is
+                  nothing to equip, so the card states plainly what picking
+                  this character gets you and how they play. */}
+              {(() => {
+                const ability = abilityForCharacter(def.id);
+                return (
+                  <div style={{ ...abilityBoxStyle, borderColor: ability.color }}>
+                    <div style={{ fontSize: 11.5, fontWeight: 800 }}>{ability.icon} {ability.name}</div>
+                    <div style={{ fontSize: 10, opacity: 0.75 }}>{ability.playstyle}</div>
+                  </div>
+                );
+              })()}
               {selected ? (
                 <button className="big-button secondary" disabled style={smallButtonStyle}>AUSGEWÄHLT</button>
               ) : unlocked ? (
@@ -93,6 +106,12 @@ export function CharacterMenuScreen() {
 const sectionTitleStyle: CSSProperties = { color: '#ffd54f', marginTop: 20, marginBottom: 10 };
 const heroGridStyle: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10 };
 const heroCardStyle: CSSProperties = { padding: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, color: '#fff' };
+// Framed in the ability's own colour, so the four heroes are visibly four
+// different things at a glance rather than four names in the same box.
+const abilityBoxStyle: CSSProperties = {
+  width: '100%', padding: '5px 6px', borderRadius: 10, textAlign: 'center',
+  background: 'rgba(0,0,0,0.28)', border: '1.5px solid', marginTop: 2,
+};
 const capeGridStyle: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(96px, 1fr))', gap: 10, paddingBottom: 20 };
 const capeCardStyle: CSSProperties = { padding: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, color: '#fff' };
 const smallButtonStyle: CSSProperties = { padding: '8px 10px', fontSize: 11.5, minHeight: 36, width: '100%' };

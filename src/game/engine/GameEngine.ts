@@ -1,4 +1,4 @@
-import type { BossDef, SpecialWeaponId, SuperpowerId, WeaponDef, WeaponId } from '../types';
+import type { AnimState, BossDef, CharacterAbilityDef, CharacterAbilityId, SpecialWeaponId, SuperpowerId, WeaponDef, WeaponId } from '../types';
 import { Fighter, freshStatus } from '../entities/Fighter';
 import { createBoss, createEnemy, createPlayer } from '../entities/factory';
 import { ENEMIES } from '../../data/enemies';
@@ -8,6 +8,7 @@ import { getLevel } from '../../data/levels';
 import { BALANCE, enemyAggression, enemyRecoveryBonusMs, enemyTelegraphMs, readyDurationMs } from '../../data/balance';
 import { WEAPONS } from '../../data/weapons';
 import { SUPERPOWERS } from '../../data/superpowers';
+import { abilityForCharacter } from '../../data/characterAbilities';
 import { SPECIAL_WEAPONS, SPECIAL_WEAPON_UNLOCK_LEVELS } from '../../data/specialWeapons';
 import type { SaveData } from '../../storage/saveData';
 import { useAppStore } from '../../state/appStore';
@@ -19,7 +20,7 @@ import { HitStop, ScreenShake } from '../effects/screenEffects';
 import { audio, type SoundId } from '../audio/audioManager';
 import { renderArena, type ArenaLayout } from './renderArena';
 import { pickRandomWeather, type WeatherState, type WeatherId } from './weather';
-import { renderFighter } from './renderFighter';
+import { renderFighter, drawDentures } from './renderFighter';
 import { renderBoss } from './renderBoss';
 import { applyDefense, resolveHit, scoreForHit } from './combatMath';
 
@@ -56,6 +57,18 @@ export interface HudState {
   levelWonInfo: { score: number; leveledUp: boolean } | null;
   gameOverSummary: { score: number; level: number; kills: number; bosses: number; combo: number } | null;
   superpowerCooldowns: Record<SuperpowerId, number>;
+  /** The signature ability of the hero being played — see
+   * data/characterAbilities.ts. Always present: there is no state in which
+   * a character has none, so the button never disappears, it only greys
+   * out while it is recharging. */
+  characterAbility: {
+    id: CharacterAbilityId;
+    label: string;
+    icon: string;
+    color: string;
+    cooldownMs: number;
+    ready: boolean;
+  };
   toast: string | null;
 }
 
@@ -319,6 +332,61 @@ function buildPlatforms(worldWidth: number, groundY: number): Platform[] {
  * scaled by how hard the blow was. Held as world-space state (rather than
  * fired as particles) so the whole burst — star, ring, speed lines — stays
  * one readable shape instead of a scatter of dots. */
+// Grandpa's dentures in flight. One object covers the whole round trip —
+// out, bounce, back — because the return leg (and the chance of it hitting
+// him in the head) is the joke, not a separate ability.
+interface DentureFlight {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  ageMs: number;
+  spin: number;
+  /** 'out' until it connects (or runs out of range), then 'back'. */
+  leg: 'out' | 'back';
+  /** Only ever damages once, however many bodies it passes through. */
+  hasHit: boolean;
+  /** Where it is trying to get back to — Grandpa's hand. */
+  homeX: number;
+  homeY: number;
+}
+
+// Punk's chord, travelling forward as a set of expanding arcs.
+interface ShockwaveEffect {
+  originX: number;
+  originY: number;
+  dir: 1 | -1;
+  ageMs: number;
+  totalMs: number;
+  reach: number;
+  hasHit: boolean;
+  color: string;
+}
+
+// Bruno's stomp, travelling along the floor as a widening crack.
+interface StompShock {
+  originX: number;
+  groundY: number;
+  dir: 1 | -1;
+  ageMs: number;
+  totalMs: number;
+  reach: number;
+  hasHit: boolean;
+  /** Fixed per cast so the crack keeps the same jagged shape as it grows
+   * instead of reshuffling its own zig-zag every frame. */
+  seed: number;
+}
+
+// One-shot poses that have to hand control back once their lockout runs
+// out. Without being listed here a pose simply stays on screen forever
+// (the character stands frozen in the last frame of a move they finished
+// seconds ago), so every new one-shot animation belongs in this set.
+const SETTLE_TO_IDLE: ReadonlySet<AnimState> = new Set<AnimState>([
+  'fart', 'superpower', 'hit', 'stagger',
+  // Signature abilities.
+  'dentures', 'annoyed', 'rockPose', 'stomp',
+]);
+
 interface ImpactBurst {
   x: number;
   y: number;
@@ -398,6 +466,19 @@ export class GameEngine {
   private impacts: ImpactBurst[] = [];
   // Counts down from the Kacken squat to the moment the pile actually lands.
   private poopDropDelayMs = 0;
+  // --- character signature abilities ---------------------------------------
+  // One shared cooldown, because a hero only ever has one signature ability
+  // (see data/characterAbilities.ts) — it is chosen by which character is
+  // selected, never equipped, so there is nothing to key a map by.
+  characterAbilityCooldownMs = 0;
+  /** Set when a signature ability is cast, cleared when its payload fires.
+   * The payload is deliberately delayed to the frame of the animation where
+   * the motion actually reaches the enemy, so nothing ever happens before
+   * the character has visibly done it. */
+  private pendingAbilityMs = 0;
+  private denture: DentureFlight | null = null;
+  private shockwave: ShockwaveEffect | null = null;
+  private stompShock: StompShock | null = null;
   // Klopapier weapon: the paper ribbon flying from hand to target on a hit.
   private paperThrow: { fromX: number; fromY: number; toX: number; toY: number; ageMs: number; totalMs: number } | null = null;
   // Mosquito pass: current mosquito (if any) and a cooldown before the next
@@ -595,6 +676,15 @@ export class GameEngine {
     // reference point regardless of level) and gets collected within a
     // fraction of a second in the new level instead of vanishing.
     this.storkFlight = null;
+    // A signature ability mid-flight belongs to the fight that is ending —
+    // dentures still travelling towards a corpse would arrive in the next
+    // level and hit whoever happens to be standing there. The cooldown
+    // itself deliberately carries over: it is the ability's cost, and
+    // resetting it every level would make it effectively free.
+    this.denture = null;
+    this.shockwave = null;
+    this.stompShock = null;
+    this.pendingAbilityMs = 0;
     this.combo = 0; // a new opponent starts a fresh hit streak
 
     // Section 1: start with clear daylight between the two fighters rather
@@ -1520,6 +1610,616 @@ export class GameEngine {
     window.setTimeout(() => this.fireSuperpower(id), 680);
   }
 
+
+  // =====================================================================
+  // Character signature abilities
+  //
+  // One per hero, fixed to the character rather than equipped (see
+  // data/characterAbilities.ts). They all follow the same eight-beat shape
+  // the brief asks for — preparation, body movement, the attack itself,
+  // the effect, the hit reaction, damage, an after-beat, back to idle —
+  // which is why none of them applies damage at the moment the button is
+  // pressed. `pendingAbilityMs` holds the payload back until the frame of
+  // the animation where the motion has actually arrived.
+  // =====================================================================
+
+  /** The signature ability of whoever is currently being played. */
+  get characterAbility(): CharacterAbilityDef {
+    return abilityForCharacter(this.player.characterId);
+  }
+
+  useCharacterAbility(): void {
+    if (this.phase !== 'playing' || this.overlayPaused) return;
+    if (this.characterAbilityCooldownMs > 0) return;
+    if (!this.player.canAct()) return;
+    const def = this.characterAbility;
+    this.characterAbilityCooldownMs = def.cooldownMs;
+
+    // Face the enemy first — every one of these is aimed, and casting one
+    // into empty space because the player happened to be walking away
+    // would read as the ability being broken.
+    if (this.enemy && !this.enemy.isDead) {
+      this.player.facing = this.enemy.body.pos.x >= this.player.body.pos.x ? 1 : -1;
+    }
+    this.player.body.vel.x = 0;
+
+    switch (def.id) {
+      case 'dentures':
+        this.player.setAnim('dentures', true);
+        this.player.hitstunRemainingMs = 1500;
+        audio.play('denturePull', { delaySec: 0.24 });
+        audio.vibrate([20, 60, 30]);
+        // Leaves the hand at the end of the whip (see the 'dentures' pose).
+        this.pendingAbilityMs = 960;
+        break;
+      case 'rockWave':
+        this.player.setAnim('rockPose', true);
+        this.player.hitstunRemainingMs = 1350;
+        // The chord starts sounding as the arm comes down, a beat before
+        // the wave leaves him.
+        audio.play('rockChord', { delaySec: 0.5 });
+        audio.vibrate([40, 30, 120]);
+        this.pendingAbilityMs = 570;
+        break;
+      case 'groundStomp':
+        this.player.setAnim('stomp', true);
+        this.player.hitstunRemainingMs = 1400;
+        audio.play('stompCharge');
+        audio.vibrate([25, 200, 90]);
+        this.pendingAbilityMs = 520;
+        break;
+      case 'pressureFart':
+      default:
+        this.player.setAnim('fart', true);
+        this.player.hitstunRemainingMs = 1250;
+        audio.vibrate([30, 40, 60, 40, 110]);
+        this.pendingAbilityMs = 660;
+        break;
+    }
+    this.showToast(`${def.icon} ${def.name.toUpperCase()}!`, 900);
+  }
+
+  /** What a signature ability actually takes off a given target.
+   *
+   * The flat number in the data table is tuned against a normal enemy (a
+   * quarter to two-fifths of its health). A boss has several times that
+   * pool, so the same flat number reads as nothing at all — one percent,
+   * indistinguishable from a jab, which makes the hero's defining move
+   * pointless in exactly the fights where it should matter most. The floor
+   * keeps it proportionally smaller against a boss, as it should be, while
+   * still landing as a real hit. It only ever raises the damage, so normal
+   * enemies (whose 6% is far below the flat value) are untouched. */
+  private abilityDamageFor(target: Fighter, def: CharacterAbilityDef): number {
+    return applyDefense(Math.max(def.damage, target.maxHealth * 0.06), target.stats.defense);
+  }
+
+  /** Runs the delayed payload of whichever signature ability is mid-cast. */
+  private updateCharacterAbility(dtMs: number): void {
+    if (this.characterAbilityCooldownMs > 0) {
+      this.characterAbilityCooldownMs = Math.max(0, this.characterAbilityCooldownMs - dtMs);
+    }
+    if (this.pendingAbilityMs <= 0) return;
+    // Killed mid-cast: the move never happens. Super armour keeps the
+    // animation running through hits, but it deliberately does not survive
+    // the player actually going down.
+    if (this.player.isDead) { this.pendingAbilityMs = 0; return; }
+    this.pendingAbilityMs -= dtMs;
+    if (this.pendingAbilityMs > 0) return;
+    this.pendingAbilityMs = 0;
+    switch (this.characterAbility.id) {
+      case 'dentures': this.fireDentures(); break;
+      case 'rockWave': this.fireRockWave(); break;
+      case 'groundStomp': this.fireGroundStomp(); break;
+      default: this.firePressureFart(); break;
+    }
+  }
+
+  // --- Windelmann: Druck-Furz ---------------------------------------------
+  // His signature stays the fart — but a pressurised one, deliberately not
+  // the same thing as the unlockable Gaswolken-Furz. That one is a lingering
+  // debuff cloud; this is a blast: a widening cone of gas that physically
+  // shoves whatever is standing in it and leaves them coughing.
+  private firePressureFart(): void {
+    const player = this.player;
+    const def = this.characterAbility;
+    const dir = player.facing;
+    const originX = player.body.pos.x + dir * 18 * player.scale;
+    const originY = floorY(player.body) - 24 * player.scale;
+
+    audio.play('gasBlast');
+    audio.playFart();
+    this.shake.add(0.55);
+    this.spawnComicText('BRAAAP!', originX + dir * 40, originY - 50, '#aed581');
+
+    // The blast itself: a cone of gas widening away from him, plus the
+    // pressure rings that make it read as force rather than a smell.
+    for (let i = 0; i < 30; i++) {
+      const reach = Math.random();
+      const spread = (Math.random() - 0.5) * (0.25 + reach * 0.95);
+      this.particles.burst({
+        x: originX + dir * reach * def.range * 0.85,
+        y: originY + spread * 70,
+      }, 1, {
+        color: Math.random() < 0.3 ? '#c5e1a5' : Math.random() < 0.6 ? '#8bc34a' : '#689f38',
+        shape: 'cloud',
+        size: 16 + reach * 26,
+        life: 0.7 + Math.random() * 0.6, maxLife: 1.3,
+        vel: { x: dir * (160 + reach * 220), y: spread * 60 - 20 },
+        gravity: -30,
+      });
+    }
+    for (let i = 0; i < 4; i++) {
+      this.particles.burst({ x: originX + dir * (20 + i * 34), y: originY }, 1, {
+        color: '#dcedc8', shape: 'ring', size: 26 + i * 14,
+        life: 0.35 + i * 0.06, maxLife: 0.55, vel: { x: dir * 260, y: 0 },
+      });
+    }
+    // The flies that always turn up.
+    for (let i = 0; i < 5; i++) {
+      this.particles.burst({ x: originX + dir * (30 + Math.random() * 90), y: originY - 20 - Math.random() * 30 }, 1, {
+        color: '#37474f', shape: 'spark', size: 4,
+        life: 1.4, maxLife: 1.4, vel: { x: dir * 40 + (Math.random() - 0.5) * 60, y: (Math.random() - 0.5) * 50 }, gravity: -10,
+      });
+    }
+
+    const enemy = this.enemy;
+    if (!enemy || enemy.isDead) return;
+    const dx = enemy.body.pos.x - player.body.pos.x;
+    // A cone, so it only catches what is actually in front of him.
+    if (Math.sign(dx) !== dir || Math.abs(dx) > def.range) return;
+    if (Math.abs(floorY(enemy.body) - floorY(player.body)) > 90) return;
+
+    this.dealDamageTo(enemy, this.abilityDamageFor(enemy, def), false);
+    this.addScore(BALANCE.score.superpowerHit);
+    // Real force, then a lingering fog they have to fight through.
+    applyKnockback(enemy.body, dir, 320, 0.32);
+    enemy.applySlow(0.5, 3000);
+    enemy.setAnim('knockback', true);
+    enemy.hitstunRemainingMs = Math.max(enemy.hitstunRemainingMs, 480);
+    this.spawnImpact(enemy.body.pos.x, floorY(enemy.body) - 60, 'multi', 0.7);
+    this.spawnComicText('PFUI!', enemy.body.pos.x, floorY(enemy.body) - 140, '#aed581');
+    this.hitStop.trigger(90);
+  }
+
+  // --- Grandpa: Gebiss-Angriff --------------------------------------------
+  private fireDentures(): void {
+    const player = this.player;
+    const dir = player.facing;
+    const hand = this.handWorldPos(player);
+    audio.play('dentureThrow');
+    this.denture = {
+      x: hand.x, y: hand.y,
+      vx: dir * 470, vy: -70,
+      ageMs: 0, spin: 0, leg: 'out', hasHit: false,
+      homeX: hand.x, homeY: hand.y,
+    };
+    this.spawnComicText('KLACK-KLACK!', hand.x + dir * 30, hand.y - 40, '#fffde7');
+  }
+
+  private updateDenture(dtMs: number): void {
+    const d = this.denture;
+    if (!d) return;
+    const def = this.characterAbility;
+    const dt = dtMs / 1000;
+    d.ageMs += dtMs;
+    d.spin += dt * 14;
+
+    if (d.leg === 'out') {
+      // A slight arc, so it looks thrown rather than fired.
+      d.vy += 220 * dt;
+      d.x += d.vx * dt;
+      d.y += d.vy * dt;
+      // Chatters the whole way — the sound is what makes it a denture.
+      if (Math.random() < dt * 6) audio.play('dentureThrow', { gain: 0.35 });
+      if (Math.random() < dt * 30) {
+        this.particles.burst({ x: d.x, y: d.y }, 1, {
+          color: '#ffffff', shape: 'spark', size: 3, life: 0.25, maxLife: 0.25,
+        });
+      }
+
+      const enemy = this.enemy;
+      if (!d.hasHit && enemy && !enemy.isDead) {
+        const ey = floorY(enemy.body) - 55 * enemy.scale;
+        if (Math.abs(d.x - enemy.body.pos.x) < 30 * enemy.scale && Math.abs(d.y - ey) < 55 * enemy.scale) {
+          this.denturesConnect(enemy);
+          return;
+        }
+      }
+      // Ran out of throw — turns around and comes back on its own.
+      const travelled = Math.abs(d.x - d.homeX);
+      const offArena = d.x < this.layout.minX - 40 || d.x > this.layout.maxX + 40;
+      if (travelled > def.range || offArena || d.y > this.layout.groundY - 4) {
+        this.startDentureReturn(d);
+      }
+      return;
+    }
+
+    // Coming home. Homes in on the hand rather than retracing the arc, so
+    // it always actually arrives no matter where Grandpa has walked to.
+    const hand = this.handWorldPos(this.player);
+    d.homeX = hand.x;
+    d.homeY = hand.y;
+    const dx = d.homeX - d.x;
+    const dy = d.homeY - d.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    const speed = 430;
+    d.x += (dx / dist) * speed * dt;
+    d.y += (dy / dist) * speed * dt;
+    if (dist < 26) this.catchDentures();
+  }
+
+  private denturesConnect(enemy: Fighter): void {
+    const d = this.denture;
+    if (!d) return;
+    const def = this.characterAbility;
+    d.hasHit = true;
+    const dir: 1 | -1 = d.vx >= 0 ? 1 : -1;
+
+    this.dealDamageTo(enemy, this.abilityDamageFor(enemy, def), false);
+    this.addScore(BALANCE.score.superpowerHit);
+    audio.play('dentureHit');
+    this.hitStop.trigger(110);
+    this.shake.add(0.4);
+
+    // Bounces off, shoves them back, and leaves them staring at it.
+    applyKnockback(enemy.body, dir, 300, 0.3);
+    enemy.setAnim('surprised', true);
+    enemy.hitstunRemainingMs = Math.max(enemy.hitstunRemainingMs, 700);
+    const ey = floorY(enemy.body) - 55 * enemy.scale;
+    this.spawnImpact(enemy.body.pos.x, ey, 'punch', 0.85);
+    this.spawnComicText('KNIRSCH!', enemy.body.pos.x, ey - 60, '#fff59d');
+    this.particles.burst({ x: d.x, y: d.y }, 12, {
+      color: '#fffdf7', shape: 'spark', size: 5, life: 0.45, maxLife: 0.45, gravity: 260,
+    });
+
+    // The bounce: kicked back the way it came, then it homes in on him.
+    d.x = enemy.body.pos.x - dir * 26;
+    d.vx = -dir * 380;
+    d.vy = -200;
+    this.startDentureReturn(d);
+  }
+
+  private startDentureReturn(d: DentureFlight): void {
+    d.leg = 'back';
+    d.ageMs = 0;
+  }
+
+  private catchDentures(): void {
+    const d = this.denture;
+    if (!d) return;
+    this.denture = null;
+    const player = this.player;
+    // The punchline, and only sometimes — a gag that fires every single
+    // time stops being a gag. Never while he is already in trouble, and
+    // never for real damage: it is embarrassment, not a wound.
+    const bonk = Math.random() < 0.45 && !player.isDead && player.health > player.maxHealth * 0.25;
+    if (bonk) {
+      audio.play('dentureBonk');
+      audio.vibrate(35);
+      player.setAnim('annoyed', true);
+      player.hitstunRemainingMs = Math.max(player.hitstunRemainingMs, 950);
+      const hx = player.body.pos.x;
+      const hy = floorY(player.body) - 78 * player.scale;
+      this.spawnComicText('AUA!', hx, hy - 30, '#ffab91');
+      this.particles.burst({ x: hx, y: hy }, 8, {
+        color: '#ffe082', shape: 'spark', size: 4, life: 0.4, maxLife: 0.4, gravity: 200,
+      });
+      this.showToast('🦷 Autsch. Immer dasselbe.', 1100);
+    } else {
+      audio.play('denturePull', { gain: 0.3 });
+      this.spawnComicText('KLACK!', player.body.pos.x, floorY(player.body) - 110, '#fffde7');
+    }
+  }
+
+  /** Where the front hand currently is in world space — the dentures have
+   * to leave from and return to a hand the player can actually see, not to
+   * an abstract body centre. */
+  private handWorldPos(f: Fighter): { x: number; y: number } {
+    return {
+      x: f.body.pos.x + f.facing * 30 * f.scale,
+      y: floorY(f.body) - 62 * f.scale,
+    };
+  }
+
+  private renderDenture(ctx: CanvasRenderingContext2D): void {
+    const d = this.denture;
+    if (!d) return;
+    // Chatters open and shut as it flies.
+    const bite = 0.5 + Math.sin(d.ageMs / 45) * 0.5;
+    drawDentures(ctx, d.x, d.y, d.spin, 1.5, bite);
+  }
+
+  // --- Punk: Punk-Rock-Schockwelle ----------------------------------------
+  private fireRockWave(): void {
+    const player = this.player;
+    const def = this.characterAbility;
+    const dir = player.facing;
+    audio.play('shockwaveBoom');
+    this.shake.add(0.75);
+    this.hitStop.trigger(70);
+
+    this.shockwave = {
+      originX: player.body.pos.x + dir * 20 * player.scale,
+      originY: floorY(player.body) - 58 * player.scale,
+      dir, ageMs: 0, totalMs: 620, reach: def.range, hasHit: false,
+      color: def.color,
+    };
+    this.spawnComicText('WROOAAR!', player.body.pos.x + dir * 50, floorY(player.body) - 130, '#ce93d8');
+    for (let i = 0; i < 14; i++) {
+      this.particles.burst({ x: this.shockwave.originX, y: this.shockwave.originY }, 1, {
+        color: i % 2 === 0 ? '#ce93d8' : '#f8bbd0', shape: 'spark', size: 6,
+        life: 0.5, maxLife: 0.5,
+        vel: { x: dir * (180 + Math.random() * 320), y: (Math.random() - 0.5) * 260 },
+      });
+    }
+  }
+
+  private updateShockwave(dtMs: number): void {
+    const w = this.shockwave;
+    if (!w) return;
+    w.ageMs += dtMs;
+    const t = Math.min(1, w.ageMs / w.totalMs);
+    const front = w.originX + w.dir * t * w.reach;
+
+    // Debris torn along with it.
+    if (Math.random() < 0.5) {
+      this.particles.burst({ x: front, y: w.originY + (Math.random() - 0.5) * 90 }, 1, {
+        color: Math.random() < 0.5 ? '#ce93d8' : '#e1bee7', shape: 'dust', size: 8,
+        life: 0.4, maxLife: 0.4, vel: { x: w.dir * 180, y: (Math.random() - 0.5) * 80 },
+      });
+    }
+
+    const enemy = this.enemy;
+    if (!w.hasHit && enemy && !enemy.isDead) {
+      const dx = enemy.body.pos.x - w.originX;
+      if (Math.sign(dx) === w.dir && Math.abs(dx) <= Math.abs(front - w.originX) + 26) {
+        w.hasHit = true;
+        const def = this.characterAbility;
+        this.dealDamageTo(enemy, this.abilityDamageFor(enemy, def), false);
+        this.addScore(BALANCE.score.superpowerHit);
+        // Its whole identity is the shove: the biggest knockback of the
+        // four, and the enemy is still sliding when it lands.
+        applyKnockback(enemy.body, w.dir, 480, 0.3);
+        enemy.setAnim('knockback', true);
+        enemy.hitstunRemainingMs = Math.max(enemy.hitstunRemainingMs, 620);
+        const ey = floorY(enemy.body) - 60 * enemy.scale;
+        this.spawnImpact(enemy.body.pos.x, ey, 'multi', 0.8);
+        this.spawnComicText('WUMM!', enemy.body.pos.x, ey - 70, '#ce93d8');
+        this.hitStop.trigger(110);
+        this.shake.add(0.5);
+      }
+    }
+    if (t >= 1) this.shockwave = null;
+  }
+
+  private renderShockwave(ctx: CanvasRenderingContext2D): void {
+    const w = this.shockwave;
+    if (!w) return;
+    const t = Math.min(1, w.ageMs / w.totalMs);
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // Four arcs chasing each other outward — a wavefront, not one ring —
+    // each drawn as a filled band with a bright leading edge. Thin strokes
+    // simply vanish against the arena's own greens and browns, and the
+    // whole point of this ability is that you cannot miss it.
+    const arcPath = (dist: number, halfHeight: number) => {
+      const x = w.originX + w.dir * dist;
+      ctx.beginPath();
+      ctx.moveTo(x - w.dir * 30, w.originY - halfHeight);
+      ctx.quadraticCurveTo(x + w.dir * 26, w.originY, x - w.dir * 30, w.originY + halfHeight);
+    };
+
+    for (let i = 3; i >= 0; i--) {
+      const k = t - i * 0.12;
+      if (k <= 0) continue;
+      const dist = k * w.reach;
+      const alpha = Math.max(0, (1 - k) * (1 - i * 0.16));
+      const halfHeight = 40 + k * 104;
+      // Wide soft glow first, then the hard edge on top of it.
+      ctx.strokeStyle = `rgba(123,31,162,${alpha * 0.55})`;
+      ctx.lineWidth = 22 - i * 3;
+      arcPath(dist, halfHeight);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(206,147,216,${alpha * 0.95})`;
+      ctx.lineWidth = 11 - i * 1.6;
+      arcPath(dist, halfHeight);
+      ctx.stroke();
+      if (i === 0) {
+        ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
+        ctx.lineWidth = 4.5;
+        arcPath(dist, halfHeight);
+        ctx.stroke();
+      }
+    }
+
+    // Musical notes riding the front, so it reads as sound rather than as
+    // a generic energy blast. Outlined, or they disappear into the trees.
+    ctx.font = 'bold 26px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = `rgba(74,20,140,${Math.max(0, 1 - t)})`;
+    ctx.fillStyle = `rgba(255,255,255,${Math.max(0, 1 - t)})`;
+    for (let i = 0; i < 4; i++) {
+      const k = t - i * 0.09;
+      if (k <= 0) continue;
+      const x = w.originX + w.dir * k * w.reach;
+      const y = w.originY - 30 + Math.sin(w.ageMs / 80 + i * 1.9) * 54;
+      const glyph = i % 2 === 0 ? '♬' : '♪';
+      ctx.strokeText(glyph, x, y);
+      ctx.fillText(glyph, x, y);
+    }
+    ctx.restore();
+  }
+
+  // --- Bruno: Bodenstampfer -----------------------------------------------
+  private fireGroundStomp(): void {
+    const player = this.player;
+    const def = this.characterAbility;
+    const dir = player.facing;
+    const groundY = floorY(player.body);
+    audio.play('stompImpact');
+    this.shake.add(1.1);
+    this.hitStop.trigger(130);
+
+    this.stompShock = {
+      originX: player.body.pos.x + dir * 14 * player.scale,
+      groundY, dir, ageMs: 0, totalMs: 520, reach: def.range, hasHit: false,
+      seed: Math.random() * 100,
+    };
+    this.spawnComicText('WAMM!', player.body.pos.x, groundY - 150, '#ffb300');
+    // Dirt and stones thrown up at his feet.
+    for (let i = 0; i < 22; i++) {
+      const spread = (Math.random() - 0.3) * 2;
+      this.particles.burst({ x: player.body.pos.x + spread * 30, y: groundY - 4 }, 1, {
+        color: Math.random() < 0.5 ? '#8d6e63' : Math.random() < 0.75 ? '#a1887f' : '#6d4c41',
+        shape: Math.random() < 0.3 ? 'spark' : 'dust',
+        size: 6 + Math.random() * 9,
+        life: 0.6, maxLife: 0.6,
+        vel: { x: spread * 190, y: -180 - Math.random() * 220 }, gravity: 620,
+      });
+    }
+  }
+
+  private updateStompShock(dtMs: number): void {
+    const sh = this.stompShock;
+    if (!sh) return;
+    sh.ageMs += dtMs;
+    const t = Math.min(1, sh.ageMs / sh.totalMs);
+    const front = sh.originX + sh.dir * t * sh.reach;
+
+    // Earth kicked up along the crack as it runs.
+    if (Math.random() < 0.75) {
+      this.particles.burst({ x: front, y: sh.groundY - 2 }, 1, {
+        color: Math.random() < 0.6 ? '#8d6e63' : '#bcaaa4', shape: 'dust', size: 9,
+        life: 0.45, maxLife: 0.45, vel: { x: sh.dir * 60, y: -140 - Math.random() * 90 }, gravity: 520,
+      });
+    }
+
+    const enemy = this.enemy;
+    if (!sh.hasHit && enemy && !enemy.isDead) {
+      const dx = enemy.body.pos.x - sh.originX;
+      const reached = Math.sign(dx) === sh.dir && Math.abs(dx) <= Math.abs(front - sh.originX) + 26;
+      // Travels through the ground, so it only catches somebody standing
+      // ON that ground — the one ability the platform is cover against.
+      const onSameFloor = Math.abs(floorY(enemy.body) - sh.groundY) < 30;
+      if (reached && onSameFloor && enemy.body.grounded) {
+        sh.hasHit = true;
+        const def = this.characterAbility;
+        this.dealDamageTo(enemy, this.abilityDamageFor(enemy, def), false);
+        this.addScore(BALANCE.score.superpowerHit);
+        // Thrown upward rather than away: the shock comes from underneath.
+        enemy.body.vel.y = -620;
+        enemy.body.vel.x += sh.dir * 90;
+        enemy.body.grounded = false;
+        enemy.setAnim('knockback', true);
+        enemy.hitstunRemainingMs = Math.max(enemy.hitstunRemainingMs, 780);
+        this.spawnImpact(enemy.body.pos.x, sh.groundY - 40, 'multi', 0.9);
+        this.spawnComicText('RUMMS!', enemy.body.pos.x, sh.groundY - 170, '#ffb300');
+        this.particles.burst({ x: enemy.body.pos.x, y: sh.groundY - 4 }, 16, {
+          color: '#8d6e63', shape: 'dust', size: 11, life: 0.6, maxLife: 0.6,
+          vel: { x: 0, y: -260 }, gravity: 560,
+        });
+        this.shake.add(0.6);
+        this.hitStop.trigger(120);
+      }
+    }
+    if (t >= 1) this.stompShock = null;
+  }
+
+  private renderStompShock(ctx: CanvasRenderingContext2D): void {
+    const sh = this.stompShock;
+    if (!sh) return;
+    const t = Math.min(1, sh.ageMs / sh.totalMs);
+    const fade = 1 - t * 0.5;
+    const len = t * sh.reach;
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    // groundY is the physics floor, which sits a little above the turf the
+    // player actually sees (feet are deliberately embedded a few pixels —
+    // see FOOT_SAFETY_EMBED in renderFighter). Without this offset the
+    // whole effect floats above the grass instead of being IN it.
+    const turfY = sh.groundY + 7;
+
+    // The flash at his foot on the first frames — the moment of impact has
+    // to be a bright event, otherwise a crack simply appears out of
+    // nowhere with nothing having visibly caused it.
+    if (t < 0.3) {
+      const f = 1 - t / 0.3;
+      ctx.fillStyle = `rgba(255,241,180,${f * 0.85})`;
+      ctx.beginPath();
+      ctx.ellipse(sh.originX, turfY, 30 + (1 - f) * 60, 14 + (1 - f) * 26, 0, Math.PI, 0);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(255,179,0,${f})`;
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.ellipse(sh.originX, turfY, 34 + (1 - f) * 90, 18 + (1 - f) * 44, 0, Math.PI, 0);
+      ctx.stroke();
+    }
+
+    // The crack: a wide dark split with a hot rim, jagged and tapering to
+    // nothing at the leading edge. Drawn thick — a hairline on brown
+    // ground is invisible from a phone's viewing distance.
+    const crackPath = (widthScale: number) => {
+      ctx.beginPath();
+      const steps = 16;
+      for (let i = 0; i <= steps; i++) {
+        const p = i / steps;
+        const x = sh.originX + sh.dir * p * len;
+        const jag = Math.sin(p * 20 + sh.seed) * 6 * (1 - p);
+        ctx.lineTo(x, turfY + jag);
+      }
+      ctx.lineWidth = widthScale;
+    };
+    ctx.strokeStyle = `rgba(255,193,7,${fade * 0.75})`;
+    crackPath(20 * (1 - t * 0.35));
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(38,22,12,${fade})`;
+    crackPath(12 * (1 - t * 0.35));
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(150,100,60,${fade * 0.8})`;
+    crackPath(3.5);
+    ctx.stroke();
+
+    // Slabs of earth tipped up along both edges of the split.
+    ctx.strokeStyle = `rgba(60,38,22,${fade})`;
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 9; i++) {
+      const p = (i + 0.4) / 9;
+      if (p > t) continue;
+      const x = sh.originX + sh.dir * p * len;
+      const h = 16 * (1 - p * 0.7) * (1 - t * 0.4);
+      for (const side of [-1, 1]) {
+        ctx.save();
+        ctx.translate(x, turfY + 3);
+        ctx.rotate(side * (0.3 + (i % 3) * 0.12));
+        ctx.fillStyle = side < 0 ? `rgba(109,76,65,${fade})` : `rgba(141,110,99,${fade})`;
+        ctx.beginPath();
+        ctx.moveTo(-6, 2);
+        ctx.lineTo(-3, -h);
+        ctx.lineTo(4, -h * 0.75);
+        ctx.lineTo(6, 2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // The pressure front itself, arcing up off the ground.
+    const fx = sh.originX + sh.dir * len;
+    for (const [w, col] of [[9, `rgba(255,179,0,${(1 - t) * 0.9})`], [4, `rgba(255,255,255,${(1 - t) * 0.9})`]] as const) {
+      ctx.strokeStyle = col;
+      ctx.lineWidth = w;
+      ctx.beginPath();
+      ctx.ellipse(fx, turfY - 3, 20 + t * 26, 40 + t * 56, 0, -Math.PI * 0.72, Math.PI * 0.72);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   /** Kacken. The squat itself is the pose (see the 'poop' anim); this
    * schedules the drop for the middle of the hold beat so the pile appears
    * when the character is actually down there, not the instant the button
@@ -1865,7 +2565,7 @@ export class GameEngine {
         // recovery is done lets attack -> idle -> next attack read as one
         // continuous motion instead of a jump-cut.
         player.setAnim('idle');
-      } else if (player.anim === 'fart' || player.anim === 'superpower' || player.anim === 'hit' || player.anim === 'stagger') {
+      } else if (SETTLE_TO_IDLE.has(player.anim)) {
         // Reaching this branch already means canAct() is true, i.e. any
         // hitstun/lockout behind these poses has expired — safe to settle.
         player.setAnim('idle');
@@ -1916,6 +2616,10 @@ export class GameEngine {
     this.updateLightning(dtMs);
     this.updateImpacts(dtMs);
     this.updatePoopDrop(dtMs);
+    this.updateCharacterAbility(dtMs);
+    this.updateDenture(dtMs);
+    this.updateShockwave(dtMs);
+    this.updateStompShock(dtMs);
     this.consumeWrapBreak(player);
     if (enemy) this.consumeWrapBreak(enemy);
     this.updateMosquitoSpawn(dtMs);
@@ -3964,6 +4668,9 @@ export class GameEngine {
     this.renderBeamEffect(ctx);
     this.renderTornadoEffect(ctx);
     this.renderPaperThrow(ctx);
+    this.renderShockwave(ctx);
+    this.renderStompShock(ctx);
+    this.renderDenture(ctx);
     this.renderLightning(ctx);
     this.renderImpacts(ctx);
     this.particles.render(ctx);
@@ -4565,6 +5272,14 @@ export class GameEngine {
         score: this.score, level: this.levelIndex, kills: this.enemiesDefeated, bosses: this.bossesDefeated, combo: this.highestCombo,
       } : null,
       superpowerCooldowns: cooldowns,
+      characterAbility: {
+        id: this.characterAbility.id,
+        label: this.characterAbility.shortLabel,
+        icon: this.characterAbility.icon,
+        color: this.characterAbility.color,
+        cooldownMs: Math.max(0, this.characterAbilityCooldownMs),
+        ready: this.characterAbilityCooldownMs <= 0,
+      },
       toast: this.toastMessage,
     });
   }
