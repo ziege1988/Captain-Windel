@@ -1646,11 +1646,13 @@ export class GameEngine {
     switch (def.id) {
       case 'dentures':
         this.player.setAnim('dentures', true);
-        this.player.hitstunRemainingMs = 1500;
-        audio.play('denturePull', { delaySec: 0.24 });
+        this.player.hitstunRemainingMs = 1000;
+        // The suction pop of them coming loose lands as the mouth opens,
+        // the spit itself on the whip forward.
+        audio.play('denturePull', { delaySec: 0.3, gain: 0.7 });
         audio.vibrate([20, 60, 30]);
-        // Leaves the hand at the end of the whip (see the 'dentures' pose).
-        this.pendingAbilityMs = 960;
+        // Leaves the mouth on the whip forward (see the 'dentures' pose).
+        this.pendingAbilityMs = 540;
         break;
       case 'rockWave':
         this.player.setAnim('rockPose', true);
@@ -1785,15 +1787,28 @@ export class GameEngine {
   private fireDentures(): void {
     const player = this.player;
     const dir = player.facing;
-    const hand = this.handWorldPos(player);
-    audio.play('dentureThrow');
+    const mouth = this.mouthWorldPos(player);
+    audio.play('dentureSpit');
+    audio.play('dentureThrow', { delaySec: 0.05, gain: 0.8 });
+    this.shake.add(0.3);
     this.denture = {
-      x: hand.x, y: hand.y,
+      x: mouth.x, y: mouth.y,
       vx: dir * 470, vy: -70,
       ageMs: 0, spin: 0, leg: 'out', hasHit: false,
-      homeX: hand.x, homeY: hand.y,
+      homeX: mouth.x, homeY: mouth.y,
     };
-    this.spawnComicText('KLACK-KLACK!', hand.x + dir * 30, hand.y - 40, '#fffde7');
+    // The spray that goes with it — this is a spit, and a spit without any
+    // spit in it is just an object appearing in mid-air.
+    for (let i = 0; i < 9; i++) {
+      this.particles.burst({ x: mouth.x + dir * 6, y: mouth.y }, 1, {
+        color: i % 3 === 0 ? '#ffffff' : '#dbeef5',
+        shape: 'drop', size: 3 + Math.random() * 3,
+        life: 0.35 + Math.random() * 0.2, maxLife: 0.55,
+        vel: { x: dir * (150 + Math.random() * 260), y: -60 + Math.random() * 120 },
+        gravity: 420,
+      });
+    }
+    this.spawnComicText('PTOOO!', mouth.x + dir * 34, mouth.y - 34, '#fffde7');
   }
 
   private updateDenture(dtMs: number): void {
@@ -1834,11 +1849,12 @@ export class GameEngine {
       return;
     }
 
-    // Coming home. Homes in on the hand rather than retracing the arc, so
-    // it always actually arrives no matter where Grandpa has walked to.
-    const hand = this.handWorldPos(this.player);
-    d.homeX = hand.x;
-    d.homeY = hand.y;
+    // Coming home — to the mouth it came out of, not to a hand, since he
+    // never touched it. Homes in rather than retracing the arc, so it
+    // always actually arrives no matter where Grandpa has walked to.
+    const mouth = this.mouthWorldPos(this.player);
+    d.homeX = mouth.x;
+    d.homeY = mouth.y;
     const dx = d.homeX - d.x;
     const dy = d.homeY - d.y;
     const dist = Math.hypot(dx, dy) || 1;
@@ -1906,18 +1922,23 @@ export class GameEngine {
       });
       this.showToast('🦷 Autsch. Immer dasselbe.', 1100);
     } else {
-      audio.play('denturePull', { gain: 0.3 });
-      this.spawnComicText('KLACK!', player.body.pos.x, floorY(player.body) - 110, '#fffde7');
+      // Caught the way they left: straight back into the mouth.
+      audio.play('dentureHit', { gain: 0.35 });
+      const m = this.mouthWorldPos(player);
+      this.spawnComicText('KLACK!', m.x, m.y - 30, '#fffde7');
     }
   }
 
-  /** Where the front hand currently is in world space — the dentures have
-   * to leave from and return to a hand the player can actually see, not to
-   * an abstract body centre. */
-  private handWorldPos(f: Fighter): { x: number; y: number } {
+  /** Where the mouth currently is in world space. Mirrors the head
+   * placement in renderFighter (shoulder at -height*0.78, head one radius
+   * plus the neck gap above it, mouth a little below the head centre) so
+   * the dentures leave from and return to the mouth the player is actually
+   * looking at, rather than from an abstract body centre. */
+  private mouthWorldPos(f: Fighter): { x: number; y: number } {
+    const headLocalY = -f.height * 0.78 - 13 - 6;
     return {
-      x: f.body.pos.x + f.facing * 30 * f.scale,
-      y: floorY(f.body) - 62 * f.scale,
+      x: f.body.pos.x + f.facing * 8 * f.scale,
+      y: floorY(f.body) + (headLocalY + 6) * f.scale,
     };
   }
 
@@ -1926,7 +1947,7 @@ export class GameEngine {
     if (!d) return;
     // Chatters open and shut as it flies.
     const bite = 0.5 + Math.sin(d.ageMs / 45) * 0.5;
-    drawDentures(ctx, d.x, d.y, d.spin, 1.5, bite);
+    drawDentures(ctx, d.x, d.y, d.spin, 1.0, bite);
   }
 
   // --- Punk: Punk-Rock-Schockwelle ----------------------------------------

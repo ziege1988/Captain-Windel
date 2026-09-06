@@ -28,7 +28,7 @@ export type SoundId =
   | 'multiStrike'
   | 'poopPlop' | 'flyBuzz'
   // --- character signature abilities ---------------------------------------
-  | 'denturePull' | 'dentureThrow' | 'dentureHit' | 'dentureBonk'
+  | 'denturePull' | 'dentureSpit' | 'dentureThrow' | 'dentureHit' | 'dentureBonk'
   | 'rockChord' | 'shockwaveBoom'
   | 'stompCharge' | 'stompImpact'
   | 'gasBlast';
@@ -316,7 +316,21 @@ const SOUND_SPECS: Record<SoundId, SoundSpec> = {
       n({ wave: 'sine', freq: 640, freqEnd: 180, durationMs: 90, gain: 0.5, attackMs: 1, delayMs: 120 }),
     ],
   },
-  // The throw: a whoosh with the teeth already chattering inside it. The
+  // The spit itself. A short wet burst of air off the tongue with a hard
+  // "t" transient in front of it — the "ptoo" — and no tone at all, which
+  // is what separates a spit from a throw.
+  dentureSpit: {
+    volume: 0.55, variance: 0.13,
+    layers: [
+      // The lips/tongue releasing: a very short bright click.
+      n({ wave: 'noise', durationMs: 32, gain: 0.9, attackMs: 1, filter: { type: 'highpass', freq: 2600 } }),
+      // The burst of air behind it, closing down as it runs out.
+      n({ wave: 'noise', durationMs: 210, gain: 0.75, attackMs: 3, delayMs: 14, filter: { type: 'bandpass', freq: 2400, freqEnd: 620, q: 0.9 } }),
+      // A little wetness underneath.
+      n({ wave: 'noise', durationMs: 130, gain: 0.4, attackMs: 4, delayMs: 20, filter: { type: 'lowpass', freq: 900, freqEnd: 260, q: 2.6 } }),
+    ],
+  },
+  // The flight: a whoosh with the teeth already chattering inside it. The
   // repeated short clacks are what make it a denture and not a rock.
   dentureThrow: {
     volume: 0.5, variance: 0.1,

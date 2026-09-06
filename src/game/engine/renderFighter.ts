@@ -278,73 +278,57 @@ function computePose(f: Fighter): Pose {
       };
     }
     case 'dentures': {
-      // Grandpa's signature. The whole point is that you can SEE where the
-      // dentures come from, so the hand actually travels to the mouth,
-      // comes back down holding something, gets held up for a beat (that
-      // is the "look what I've got" moment), and only then winds up and
-      // throws. Cutting any of those beats turns it into a generic throw
-      // animation that could belong to anybody.
-      const reachEnd = 0.24;   // hand up to the mouth
-      const pullEnd = 0.46;    // pull them out, head follows the hand
-      const showEnd = 0.72;    // hold them up, grinning
-      const windEnd = 0.9;     // arm swings back behind the head
-      const throwEnd = 1.0;    // the whip forward
-      const totalEnd = 1.5;
-      let armX: number, armY: number, lean: number, headY: number, headX: number;
-      let backX = -6, backY = 26, legF = 8, legB = -8, hip = 0;
-      if (t < reachEnd) {
-        const p = t / reachEnd;
-        armX = lerp(6, 8, p); armY = lerp(26, -6, p);
-        lean = p * -0.06; headX = 0; headY = 0;
-      } else if (t < pullEnd) {
-        const p = (t - reachEnd) / (pullEnd - reachEnd);
-        // The pull itself: the hand drags forward and down away from the
-        // face, and the head leans after it as if it were stuck for a
-        // moment — the little tug that sells it.
-        armX = lerp(8, 22, p); armY = lerp(-6, 4, p);
-        lean = lerp(-0.06, 0.06, p);
-        headX = Math.sin(p * Math.PI) * 3; headY = Math.sin(p * Math.PI) * 2;
-      } else if (t < showEnd) {
-        const p = (t - pullEnd) / (showEnd - pullEnd);
-        // Held up and admired, with a small proud bob.
-        const bob = Math.sin(p * Math.PI * 2) * 1.5;
-        armX = 24; armY = -2 + bob;
-        lean = -0.08; headX = 2; headY = -1 + bob * 0.5;
-        backX = -10; backY = 22;
-      } else if (t < windEnd) {
-        const p = (t - showEnd) / (windEnd - showEnd);
-        // Wind-up: arm all the way back behind the head, weight onto the
-        // back foot, torso coiled away from the target.
-        armX = lerp(24, -22, p); armY = lerp(-2, -14, p);
-        lean = lerp(-0.08, -0.34, p);
-        headX = lerp(2, -3, p); headY = 0;
-        backX = lerp(-10, -4, p); backY = lerp(22, 28, p);
-        legF = lerp(8, 2, p); legB = lerp(-8, -16, p);
-      } else if (t < throwEnd) {
-        const p = (t - windEnd) / (throwEnd - windEnd);
-        // The whip. Fast and far — this is the frame the projectile leaves.
-        armX = lerp(-22, 34, p); armY = lerp(-14, 2, p);
-        lean = lerp(-0.34, 0.42, p);
-        headX = lerp(-3, 4, p); headY = lerp(0, 3, p);
-        backX = lerp(-4, -14, p); backY = lerp(28, 20, p);
-        legF = lerp(2, 16, p); legB = lerp(-16, -6, p);
+      // Grandpa's signature: he spits his dentures at you. So there is no
+      // hand work in this at all — the whole motion is head and torso.
+      // Cock back, mouth wide open (the dentures visible in it), then whip
+      // everything forward and let them fly. The recoil afterwards is what
+      // sells how hard he spat.
+      const readyEnd = 0.2;   // notices, starts to open up
+      const gapeEnd = 0.44;   // head cocked back, mouth wide
+      const spitEnd = 0.56;   // the whip forward — this is the frame they leave
+      const totalEnd = 1.0;
+      let lean: number, headX: number, headY: number, hip: number;
+      let armX: number, armY: number, backX: number, backY: number;
+      if (t < readyEnd) {
+        const p = t / readyEnd;
+        lean = p * 0.1; headX = p * 2; headY = p * 1;
         hip = p * 3;
+        armX = lerp(6, 10, p); armY = lerp(26, 22, p);
+        backX = lerp(-6, -9, p); backY = lerp(26, 23, p);
+      } else if (t < gapeEnd) {
+        const p = (t - readyEnd) / (gapeEnd - readyEnd);
+        // Cocking back: chin up and away, chest opens, knees soften. The
+        // further back he goes here, the harder the spit reads.
+        lean = lerp(0.1, -0.32, p);
+        headX = lerp(2, -6, p); headY = lerp(1, -4, p);
+        hip = lerp(3, 6, p);
+        armX = lerp(10, -8, p); armY = lerp(22, 16, p);
+        backX = lerp(-9, -16, p); backY = lerp(23, 18, p);
+      } else if (t < spitEnd) {
+        const p = (t - gapeEnd) / (spitEnd - gapeEnd);
+        // PTOO. Head leads, torso follows, arms fly back behind him.
+        lean = lerp(-0.32, 0.5, p);
+        headX = lerp(-6, 9, p); headY = lerp(-4, 4, p);
+        hip = lerp(6, 2, p);
+        armX = lerp(-8, -18, p); armY = lerp(16, 24, p);
+        backX = lerp(-16, -22, p); backY = lerp(18, 26, p);
       } else {
-        const p = Math.min(1, (t - throwEnd) / (totalEnd - throwEnd));
-        // Follow-through, then back to a guard — an old man who just threw
-        // something a lot harder than he should have.
-        armX = lerp(34, 6, p); armY = lerp(2, 26, p);
-        lean = lerp(0.42, 0, p);
-        headX = lerp(4, 0, p); headY = lerp(3, 0, p);
-        backX = lerp(-14, -6, p); backY = lerp(20, 26, p);
-        legF = lerp(16, 8, p); legB = lerp(-6, -8, p);
-        hip = 3 - p * 3;
+        const p = Math.min(1, (t - spitEnd) / (totalEnd - spitEnd));
+        // Settling, with one small residual bob — an old man who just put
+        // his whole neck into that.
+        const bob = Math.sin(p * Math.PI * 2.5) * 2 * (1 - p);
+        lean = lerp(0.5, 0, p);
+        headX = lerp(9, 0, p) + bob; headY = lerp(4, 0, p);
+        hip = lerp(2, 0, p);
+        armX = lerp(-18, 6, p); armY = lerp(24, 26, p);
+        backX = lerp(-22, -6, p); backY = lerp(26, 26, p);
       }
       return {
-        ...STAND, bodyLean: lean, hipY: hip, headOffsetX: headX, headOffsetY: headY,
+        ...STAND, bodyLean: lean, hipY: hip, shoulderDrop: hip * 0.6,
+        headOffsetX: headX, headOffsetY: headY,
         armFrontX: armX, armFrontY: armY, armBackX: backX, armBackY: backY,
-        legFrontX: legF, legFrontY: 40, legBackX: legB, legBackY: 40,
-        capeKick: Math.max(0, lean) * 1.2,
+        legFrontX: 9, legFrontY: 40 - hip * 0.5, legBackX: -9, legBackY: 40 - hip * 0.5,
+        capeKick: Math.max(0, lean) * 1.1,
       };
     }
     case 'annoyed': {
@@ -1194,20 +1178,25 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   if (charDef) drawPlayerHair(ctx, charDef, shoulderX + headX, headY, headR, f.animTimeMs, hairCharge(f));
   drawHeadAccessories(ctx, f, shoulderX + headX, headY, headR);
   drawFace(ctx, f, shoulderX + headX, headY, headR, pose, dtSec);
-  if (charDef) drawPlayerFaceExtras(ctx, charDef, shoulderX + headX, headY, headR, f.animTimeMs);
+  if (charDef) drawPlayerFaceExtras(ctx, charDef, shoulderX + headX, headY, headR, f.animTimeMs, dentureGape(f));
 
   // Front arm (in front of torso, holds weapon).
   drawArm(ctx, shoulderX, shoulderY, pose.armFrontX, pose.armFrontY, f, true, pose.bendFront, bw);
-  // The dentures are held in that hand from the moment they leave his
-  // mouth until the moment they leave his hand — without this the throw
-  // would be an empty-handed mime and the player would never see what is
-  // actually being thrown. The equipped weapon is hidden for those frames
-  // (nobody throws dentures while still holding an axe in the same hand).
-  const denturesHeld = f.anim === 'dentures' && f.animTimeMs >= 240 && f.animTimeMs < 990;
-  if (denturesHeld) {
-    drawDentures(ctx, shoulderX + pose.armFrontX, shoulderY + pose.armFrontY, Math.atan2(pose.armFrontY, pose.armFrontX), 1, 0.25);
-  } else {
-    drawWeaponInHand(ctx, f, shoulderX + pose.armFrontX, shoulderY + pose.armFrontY, pose.armFrontX, pose.armFrontY);
+  drawWeaponInHand(ctx, f, shoulderX + pose.armFrontX, shoulderY + pose.armFrontY, pose.armFrontX, pose.armFrontY);
+
+  // Once the mouth is open and before the spit, the dentures sit visibly
+  // inside it. Without this the mouth just gapes and something appears out
+  // of thin air at the moment he spits — the player has to SEE what is
+  // about to come out. Drawn last so it sits over the mouth cavity.
+  if (f.anim === 'dentures' && f.animTimeMs >= 300 && f.animTimeMs < 545) {
+    const p = Math.min(1, (f.animTimeMs - 300) / 245);
+    drawDentures(
+      ctx,
+      shoulderX + headX + 3.5 + p * 2.5, headY + 7,
+      // Tips forward as they come loose, ready to leave.
+      -0.25 + p * 0.35,
+      0.5, 0.55,
+    );
   }
 
   drawStatusOverlay(ctx, f, shoulderY, hipY);
@@ -2044,7 +2033,7 @@ function drawPlayerHair(ctx: CanvasRenderingContext2D, def: CharacterDef, hx: nu
 /** Small per-hero face accessories drawn on top of drawFace (so glasses
  * sit correctly over already-visible eyes rather than hiding them, and a
  * mustache sits over an already-drawn mouth). */
-function drawPlayerFaceExtras(ctx: CanvasRenderingContext2D, def: CharacterDef, hx: number, hy: number, r: number, animTimeMs: number): void {
+function drawPlayerFaceExtras(ctx: CanvasRenderingContext2D, def: CharacterDef, hx: number, hy: number, r: number, animTimeMs: number, mouthOpen = 0): void {
   if (def.id !== 'grandpa') return;
   const t = animTimeMs / 1000;
   // Occasional "richtet Brille" nudge — a tiny vertical bob every few
@@ -2067,12 +2056,16 @@ function drawPlayerFaceExtras(ctx: CanvasRenderingContext2D, def: CharacterDef, 
   ctx.moveTo(backX + r * 0.3, eyeY);
   ctx.lineTo(frontX - r * 0.32, eyeY);
   ctx.stroke();
-  // Bushy mustache under the nose.
+  // Bushy mustache under the nose. It rides up out of the way when the
+  // mouth opens wide — left where it is, a white mustache sits right in
+  // the middle of an open mouth full of white teeth and the two blend into
+  // one unreadable smear.
+  const mY = hy + r * (0.32 - mouthOpen * 0.28);
   ctx.fillStyle = '#e0e0e0';
   ctx.beginPath();
-  ctx.moveTo(hx - r * 0.05, hy + r * 0.32);
-  ctx.quadraticCurveTo(hx + r * 0.25, hy + r * 0.18, hx + r * 0.6, hy + r * 0.34);
-  ctx.quadraticCurveTo(hx + r * 0.28, hy + r * 0.5, hx - r * 0.05, hy + r * 0.32);
+  ctx.moveTo(hx - r * 0.05, mY);
+  ctx.quadraticCurveTo(hx + r * 0.25, mY - r * 0.14, hx + r * 0.6, mY + r * 0.02);
+  ctx.quadraticCurveTo(hx + r * 0.28, mY + r * 0.18, hx - r * 0.05, mY);
   ctx.closePath();
   ctx.fill();
   ctx.restore();
@@ -2129,7 +2122,7 @@ function updateFaceState(f: Fighter, dtSec: number): FaceState {
   return s;
 }
 
-type MouthShape = 'smile' | 'firm' | 'o' | 'worried' | 'grin';
+type MouthShape = 'smile' | 'firm' | 'o' | 'worried' | 'grin' | 'gape';
 
 interface Expression {
   browAngle: number; // 0 = relaxed; magnitude/sign shapes a "^" (determined/shocked) or softened brow
@@ -2137,6 +2130,10 @@ interface Expression {
   mouth: MouthShape;
   eyeWiden: number; // 0..1 extra eye-white scale (shock)
   lookY: number; // -1..1 extra pupil vertical offset (negative = look up)
+  /** 0..1, only read by the 'gape' mouth: how far it is actually open, so
+   * a mouth can be seen opening and closing over an animation instead of
+   * snapping between two fixed drawings. */
+  mouthOpen: number;
 }
 
 /** One state per anim (plus a low-health override for the otherwise-
@@ -2145,45 +2142,58 @@ interface Expression {
  * (confident/mischievous), taunt (laughing). Victory/defeat read through
  * the existing 'taunt'/'fallen'/'dead' anims rather than new ones, so no
  * gameplay state machine changes are needed. */
+/** How wide the mouth is during the dentures spit, 0..1. Shared, because
+ * more than the mouth reacts to it: the mustache has to ride up out of the
+ * way too, or it sits in the middle of an open mouth. */
+function dentureGape(f: Fighter): number {
+  if (f.anim !== 'dentures') return 0;
+  const t = f.animTimeMs / 1000;
+  if (t < 0.2) return (t / 0.2) * 0.45;
+  if (t < 0.44) return 0.45 + ((t - 0.2) / 0.24) * 0.55;
+  if (t < 0.56) return 1;
+  return Math.max(0.12, 1 - (t - 0.56) / 0.3);
+}
+
 function computeExpression(f: Fighter): Expression {
   switch (f.anim) {
     case 'attack':
     case 'kick':
-      return { browAngle: 0.4, browRaise: 0, mouth: 'firm', eyeWiden: 0, lookY: 0 };
+      return { browAngle: 0.4, browRaise: 0, mouth: 'firm', eyeWiden: 0, lookY: 0, mouthOpen: 0 };
     case 'block':
-      return { browAngle: 0.22, browRaise: 0, mouth: 'firm', eyeWiden: 0, lookY: 0 };
+      return { browAngle: 0.22, browRaise: 0, mouth: 'firm', eyeWiden: 0, lookY: 0, mouthOpen: 0 };
     case 'hit':
     case 'stagger':
     case 'knockback':
-      return { browAngle: -0.35, browRaise: 0.8, mouth: 'o', eyeWiden: 0.6, lookY: 0 };
+      return { browAngle: -0.35, browRaise: 0.8, mouth: 'o', eyeWiden: 0.6, lookY: 0, mouthOpen: 0 };
     case 'surprised':
-      return { browAngle: -0.45, browRaise: 1, mouth: 'o', eyeWiden: 0.9, lookY: -0.7 };
+      return { browAngle: -0.45, browRaise: 1, mouth: 'o', eyeWiden: 0.9, lookY: -0.7, mouthOpen: 0 };
     case 'dazed':
-      return { browAngle: -0.25, browRaise: 0.5, mouth: 'worried', eyeWiden: 0.25, lookY: -0.3 };
+      return { browAngle: -0.25, browRaise: 0.5, mouth: 'worried', eyeWiden: 0.25, lookY: -0.3, mouthOpen: 0 };
     case 'fart':
     case 'superpower':
-      return { browAngle: 0.18, browRaise: 0.2, mouth: 'grin', eyeWiden: 0, lookY: 0 };
-    // The mischievous grin is half the joke of the dentures throw — you
-    // have to see that he knows exactly what he is about to do.
+      return { browAngle: 0.18, browRaise: 0.2, mouth: 'grin', eyeWiden: 0, lookY: 0, mouthOpen: 0 };
+    // The mouth IS the attack here, so it gets its own shape and its own
+    // opening curve rather than one of the fixed faces: you have to see it
+    // open, see the dentures sitting in it, and see them leave.
     case 'dentures':
-      return { browAngle: 0.22, browRaise: 0.35, mouth: 'grin', eyeWiden: 0.15, lookY: 0 };
+      return { browAngle: 0.24, browRaise: 0.4, mouth: 'gape', eyeWiden: 0.25, lookY: 0, mouthOpen: dentureGape(f) };
     case 'annoyed':
-      return { browAngle: 0.45, browRaise: 0, mouth: 'worried', eyeWiden: 0, lookY: 0 };
+      return { browAngle: 0.45, browRaise: 0, mouth: 'worried', eyeWiden: 0, lookY: 0, mouthOpen: 0 };
     case 'rockPose':
-      return { browAngle: 0.5, browRaise: 0, mouth: 'o', eyeWiden: 0.2, lookY: -0.4 };
+      return { browAngle: 0.5, browRaise: 0, mouth: 'o', eyeWiden: 0.2, lookY: -0.4, mouthOpen: 0 };
     case 'stomp':
-      return { browAngle: 0.55, browRaise: 0, mouth: 'firm', eyeWiden: 0, lookY: 0 };
+      return { browAngle: 0.55, browRaise: 0, mouth: 'firm', eyeWiden: 0, lookY: 0, mouthOpen: 0 };
     case 'taunt':
-      return { browAngle: 0.12, browRaise: 0.15, mouth: 'grin', eyeWiden: 0, lookY: 0 };
+      return { browAngle: 0.12, browRaise: 0.15, mouth: 'grin', eyeWiden: 0, lookY: 0, mouthOpen: 0 };
     case 'fallen':
     case 'gettingUp':
     case 'dead':
     case 'bossDeath':
-      return { browAngle: -0.2, browRaise: 0, mouth: 'worried', eyeWiden: 0, lookY: 0 };
+      return { browAngle: -0.2, browRaise: 0, mouth: 'worried', eyeWiden: 0, lookY: 0, mouthOpen: 0 };
     default: {
       const lowHealth = f.maxHealth > 0 && f.health / f.maxHealth < 0.25;
-      if (lowHealth) return { browAngle: -0.16, browRaise: 0.15, mouth: 'worried', eyeWiden: 0.1, lookY: 0 };
-      return { browAngle: 0, browRaise: 0, mouth: 'smile', eyeWiden: 0, lookY: 0 };
+      if (lowHealth) return { browAngle: -0.16, browRaise: 0.15, mouth: 'worried', eyeWiden: 0.1, lookY: 0, mouthOpen: 0 };
+      return { browAngle: 0, browRaise: 0, mouth: 'smile', eyeWiden: 0, lookY: 0, mouthOpen: 0 };
     }
   }
 }
@@ -2263,6 +2273,27 @@ function drawFace(ctx: CanvasRenderingContext2D, f: Fighter, hx: number, hy: num
   ctx.lineWidth = 1.6;
   ctx.beginPath();
   switch (expr.mouth) {
+    case 'gape': {
+      // A wide open mouth: dark cavity, a tongue at the bottom, and a lip
+      // line around it. Drawn as an ellipse that grows with mouthOpen so
+      // the opening reads as a motion rather than a swap between drawings.
+      const open = Math.max(0, Math.min(1, expr.mouthOpen));
+      const mw = 4 + open * 4.5;
+      const mh = 1.6 + open * 7.5;
+      const my = hy + 7 + open * 1.5;
+      ctx.fillStyle = '#4a1f18';
+      ctx.beginPath();
+      ctx.ellipse(hx + 3, my, mw, mh, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      if (open > 0.45) {
+        ctx.fillStyle = '#d1636b';
+        ctx.beginPath();
+        ctx.ellipse(hx + 3, my + mh * 0.42, mw * 0.62, mh * 0.34, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      break;
+    }
     case 'o':
       ctx.fillStyle = '#6d3b2a';
       ctx.arc(hx + 3, hy + 7, 2.4, 0, Math.PI * 2);
