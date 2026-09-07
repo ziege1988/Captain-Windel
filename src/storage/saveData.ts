@@ -1,6 +1,6 @@
 import type { CapeColorId, CharacterId, SpecialWeaponId, SuperpowerId, WeaponId } from '../game/types';
 import { storageGet, storageSet } from './storage';
-import { WEAPONS } from '../data/weapons';
+import { WEAPONS, WEAPON_MAX_LEVEL } from '../data/weapons';
 import { SPECIAL_WEAPONS } from '../data/specialWeapons';
 
 const SAVE_KEY = 'captainWindel.save.v1';
@@ -36,6 +36,10 @@ export interface SaveData {
   // deliberately does NOT touch any of these fields).
   coins: number;
   unlockedSpecialWeapons: SpecialWeaponId[];
+  // How far each weapon has been sharpened with coins, 0 = as found. Part
+  // of the permanent layer: an upgrade is never lost to a Game Over, which
+  // is the whole reason it is worth saving up for.
+  weaponLevels: Partial<Record<WeaponId, number>>;
   // What is actually owned and how many of each. Replaces the old single
   // "one weapon, held until used" slot: a weapon can now be bought over
   // and over, and the count is what gets spent one at a time. At most
@@ -78,6 +82,7 @@ export function defaultSaveData(): SaveData {
     coins: 0,
     unlockedSpecialWeapons: [],
     specialWeaponStock: {},
+    weaponLevels: {},
     selectedCharacter: 'windelmann',
     unlockedCharacters: ['windelmann'],
     equippedCapeColor: 'red',
@@ -102,6 +107,7 @@ export function loadSaveData(): SaveData {
     };
     merged.unlockedWeapons = migrateUnlockedWeapons(merged.unlockedWeapons);
     merged.specialWeaponStock = migrateSpecialWeaponStock(parsed);
+    merged.weaponLevels = migrateWeaponLevels(parsed);
     return merged;
   } catch {
     return defaultSaveData();
@@ -145,6 +151,21 @@ function migrateSpecialWeaponStock(parsed: Record<string, unknown>): Partial<Rec
   const legacy = parsed.pendingSpecialWeapon;
   if (typeof legacy === 'string' && legacy in SPECIAL_WEAPONS && !out[legacy as SpecialWeaponId]) {
     out[legacy as SpecialWeaponId] = 1;
+  }
+  return out;
+}
+
+/** Keeps upgrade levels sane across versions: unknown weapon ids are
+ * dropped, and anything that is not a whole number in range is discarded
+ * rather than being fed into a damage multiplier. */
+function migrateWeaponLevels(parsed: Record<string, unknown>): Partial<Record<WeaponId, number>> {
+  const out: Partial<Record<WeaponId, number>> = {};
+  const raw = parsed.weaponLevels;
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [id, level] of Object.entries(raw as Record<string, unknown>)) {
+    if (!(id in WEAPONS)) continue;
+    const n = Math.floor(Number(level));
+    if (Number.isFinite(n) && n > 0) out[id as WeaponId] = Math.min(WEAPON_MAX_LEVEL, n);
   }
   return out;
 }

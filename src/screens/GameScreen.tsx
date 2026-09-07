@@ -184,7 +184,7 @@ export function GameScreen() {
             engine={engine}
             equippedSuperpowers={save.equippedSuperpowerSlots}
             cooldowns={hud.superpowerCooldowns}
-            weaponName={WEAPONS[hud.weaponId].name}
+            weaponName={hud.weaponLevel > 0 ? `${WEAPONS[hud.weaponId].name} ★${hud.weaponLevel}` : WEAPONS[hud.weaponId].name}
             hasBanana={engine.player.equippedUpgradeIds.includes('banana_peel')}
             hasBonusWeapon={hud.hasBonusWeapon}
             airSupportUnlocked={hud.airSupportUnlocked}

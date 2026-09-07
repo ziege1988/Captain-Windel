@@ -134,6 +134,53 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
 
 export const WEAPON_LIST = Object.values(WEAPONS);
 
+// ---------------------------------------------------------------------------
+// Weapon upgrades (coin sink)
+// ---------------------------------------------------------------------------
+
+// Coins had exactly two things to be spent on — special weapons and cosmetic
+// unlocks — both of which run out. Upgrades give the currency a permanent
+// home: every weapon can be sharpened, and the weapon you actually like
+// playing is the one you invest in.
+//
+// A level is a flat step rather than a compounding one, so the numbers on
+// the card ("+42% Schaden") are the numbers in the fight, and a player can
+// predict what the next purchase buys without doing exponentials.
+export const WEAPON_MAX_LEVEL = 4;
+
+const DAMAGE_PER_LEVEL = 0.14;
+const KNOCKBACK_PER_LEVEL = 0.07;
+const SPEED_PER_LEVEL = 0.04;
+
+export interface WeaponUpgradeStats {
+  damageMult: number;
+  knockbackMult: number;
+  attackSpeedMult: number;
+}
+
+/** What a given upgrade level is worth. Level 0 is the weapon as found. */
+export function weaponUpgradeStats(level: number): WeaponUpgradeStats {
+  const n = Math.max(0, Math.min(WEAPON_MAX_LEVEL, Math.floor(level)));
+  return {
+    damageMult: 1 + n * DAMAGE_PER_LEVEL,
+    knockbackMult: 1 + n * KNOCKBACK_PER_LEVEL,
+    attackSpeedMult: 1 + n * SPEED_PER_LEVEL,
+  };
+}
+
+/** Price of going from `level` to `level + 1`, or null at the cap.
+ *
+ * Two things drive it. Each step costs more than the last, so the final
+ * level is a real goal rather than an afterthought. And a weapon that
+ * already hits hard costs more to sharpen than one that does not —
+ * otherwise upgrading the cheapest weapon would always be the efficient
+ * move and the choice of what to invest in would collapse. */
+export function weaponUpgradeCost(id: WeaponId, level: number): number | null {
+  if (level >= WEAPON_MAX_LEVEL) return null;
+  const w = WEAPONS[id];
+  return Math.round((35 + level * 40) * (0.75 + w.damageMult * 0.45));
+}
+
 /** Weapons that occupy both hands. Nothing can be carried in the off-hand
  * alongside one — a shield in particular is neither drawn nor counted while
  * such a weapon is equipped (see Fighter.shieldActive). */

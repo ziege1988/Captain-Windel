@@ -3,6 +3,7 @@ import type { CapeColorId, CharacterId, SpecialWeaponId, SuperpowerId, WeaponId 
 import { defaultSaveData, loadSaveData, saveSaveData, type SaveData } from '../storage/saveData';
 import { getUnlockedSuperpowers } from '../data/superpowers';
 import { SPECIAL_WEAPONS, SPECIAL_WEAPON_SLOTS, stockKinds } from '../data/specialWeapons';
+import { weaponUpgradeCost } from '../data/weapons';
 import { CAPE_COLORS, CHARACTERS } from '../data/characters';
 
 export type ScreenId =
@@ -58,6 +59,7 @@ interface AppState {
    * rather than a button that silently does nothing. */
   purchaseSpecialWeapon: (id: SpecialWeaponId) => 'ok' | 'locked' | 'tooPoor' | 'noSlot';
   consumeSpecialWeapon: (id: SpecialWeaponId) => boolean;
+  upgradeWeapon: (id: WeaponId) => 'ok' | 'locked' | 'tooPoor' | 'maxed';
   discardSpecialWeapon: (id: SpecialWeaponId) => void;
   selectCharacter: (id: CharacterId) => void;
   purchaseCharacter: (id: CharacterId) => boolean;
@@ -281,6 +283,26 @@ export const useAppStore = create<AppState>((set, get) => ({
     saveSaveData(next);
     set({ save: next });
     return true;
+  },
+
+  /** Sharpens one weapon by one level. Same shape as buying a special
+   * weapon — 'ok' or the reason why not — so the UI never has a button
+   * that silently does nothing. */
+  upgradeWeapon: (id) => {
+    const save = get().save;
+    if (!save.unlockedWeapons.includes(id)) return 'locked';
+    const level = save.weaponLevels[id] ?? 0;
+    const cost = weaponUpgradeCost(id, level);
+    if (cost == null) return 'maxed';
+    if (save.coins < cost) return 'tooPoor';
+    const next = {
+      ...save,
+      coins: save.coins - cost,
+      weaponLevels: { ...save.weaponLevels, [id]: level + 1 },
+    };
+    saveSaveData(next);
+    set({ save: next });
+    return 'ok';
   },
 
   /** Drops a whole kind, freeing its slot for a different weapon. */

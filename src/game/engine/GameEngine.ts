@@ -6,7 +6,7 @@ import { BOSSES } from '../../data/bosses';
 import { ARENAS } from '../../data/arenas';
 import { getLevel } from '../../data/levels';
 import { BALANCE, enemyAggression, enemyRecoveryBonusMs, enemyTelegraphMs, readyDurationMs } from '../../data/balance';
-import { WEAPONS } from '../../data/weapons';
+import { WEAPONS, weaponUpgradeStats } from '../../data/weapons';
 import { SUPERPOWERS } from '../../data/superpowers';
 import { abilityForCharacter } from '../../data/characterAbilities';
 import { SPECIAL_WEAPONS, SPECIAL_WEAPON_SLOTS, SPECIAL_WEAPON_UNLOCK_LEVELS, stockKinds } from '../../data/specialWeapons';
@@ -55,6 +55,8 @@ export interface HudState {
    * each with how many are left. */
   specialWeapons: { id: SpecialWeaponId; count: number }[];
   weaponId: WeaponId;
+  /** Coin-bought upgrade level of the equipped weapon, 0 = as found. */
+  weaponLevel: number;
   bossIntroText: string;
   levelWonInfo: { score: number; leveledUp: boolean } | null;
   gameOverSummary: { score: number; level: number; kills: number; bosses: number; combo: number } | null;
@@ -1697,6 +1699,16 @@ export class GameEngine {
   // the animation where the motion has actually arrived.
   // =====================================================================
 
+  /** How far the given fighter has sharpened the weapon they are swinging.
+   * Read fresh from the store rather than snapshotted onto the fighter:
+   * upgrades are bought between runs, and reading live means there is no
+   * stale copy that could disagree with what the menu just showed. Only
+   * the player ever has one — an enemy's axe is the axe as found. */
+  private upgradeLevelFor(f: Fighter, isKick: boolean): number {
+    if (f.kind !== 'player' || isKick) return 0;
+    return useAppStore.getState().save.weaponLevels[f.weaponId] ?? 0;
+  }
+
   /** The signature ability of whoever is currently being played. */
   get characterAbility(): CharacterAbilityDef {
     return abilityForCharacter(this.player.characterId);
@@ -2492,7 +2504,11 @@ export class GameEngine {
   private startAttack(f: Fighter, isKick: boolean): void {
     f.setAnim(isKick ? 'kick' : 'attack', true);
     const weapon = WEAPONS[isKick ? 'fists' : f.weaponId];
-    const cooldownBase = isKick ? 480 : 520 / weapon.attackSpeedMult;
+    // Upgrades quicken the swing as well as strengthening it, so investing
+    // in a slow weapon makes it feel better to use rather than only making
+    // its one big number bigger.
+    const swingSpeed = weapon.attackSpeedMult * weaponUpgradeStats(this.upgradeLevelFor(f, isKick)).attackSpeedMult;
+    const cooldownBase = isKick ? 480 : 520 / swingSpeed;
     f.attackCooldownRemainingMs = cooldownBase / Math.max(0.4, f.stats.attackSpeed);
     // Section 7/9: enemies get extra recovery on top of their raw weapon
     // cadence so they can't just chain-attack the player with no opening.
@@ -3196,7 +3212,7 @@ export class GameEngine {
       const dx = attacker.body.pos.x - defender.body.pos.x;
       const facingAttacker = Math.sign(dx) === defender.facing || Math.abs(dx) < 12;
       if (facingAttacker) {
-        const blockedHit = resolveHit(attacker, weapon, isKick, perfect);
+        const blockedHit = resolveHit(attacker, weapon, isKick, perfect, this.upgradeLevelFor(attacker, isKick));
         const blockedDmg = Math.max(1, Math.round(applyDefense(blockedHit.damage, defender.stats.defense) * 0.2));
         this.dealDamageTo(defender, blockedDmg, true, isKick);
         const dir = Math.sign(defender.body.pos.x - attacker.body.pos.x) || attacker.facing;
@@ -3210,7 +3226,7 @@ export class GameEngine {
       }
     }
 
-    const hit = resolveHit(attacker, weapon, isKick, perfect);
+    const hit = resolveHit(attacker, weapon, isKick, perfect, this.upgradeLevelFor(attacker, isKick));
     // Multi-Schlag: every Nth consecutive landed hit, with nothing taken in
     // between, comes down far harder than a normal blow. Decided here, up
     // front, because it has to scale the damage that is about to be dealt.
@@ -4159,7 +4175,7 @@ export class GameEngine {
         if (dist < 34) {
           p.damageDealt = true;
           const weapon = WEAPONS[p.weaponId];
-          const hit = resolveHit(p.owner, weapon, false, false);
+          const hit = resolveHit(p.owner, weapon, false, false, this.upgradeLevelFor(p.owner, false));
           const dmg = applyDefense(hit.damage, target.stats.defense);
           if (target.invulnerableMs <= 0) {
             this.applyHit(p.owner, target, weapon, false, false);
@@ -5444,6 +5460,7 @@ export class GameEngine {
         return stockKinds(st).slice(0, SPECIAL_WEAPON_SLOTS).map((id) => ({ id, count: st[id] ?? 0 }));
       })(),
       weaponId: this.player.weaponId,
+      weaponLevel: useAppStore.getState().save.weaponLevels[this.player.weaponId] ?? 0,
       bossIntroText: this.bossDefId ? BOSSES[this.bossDefId].introText : '',
       levelWonInfo: this.phase === 'levelWon' ? { score: this.score, leveledUp: true } : null,
       gameOverSummary: this.phase === 'gameOver' ? {
