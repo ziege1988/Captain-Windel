@@ -108,12 +108,14 @@ interface Hazard {
 // won screen has frozen normal gameplay input (see updatePickups).
 interface Pickup {
   id: number;
-  kind: 'coin' | 'heart';
+  kind: 'coin' | 'heart' | 'special';
   pos: { x: number; y: number };
   vel: { x: number; y: number };
   ageMs: number;
   value: number;
   homing: boolean;
+  /** Only for 'special': which weapon this one is. */
+  specialId?: SpecialWeaponId;
 }
 
 // Humorous effects pass: the stork-with-baby flying entity shared by the
@@ -580,6 +582,12 @@ export class GameEngine {
   // from the main menu. Dying with attempts left heals and retries the
   // current level (see handlePlayerDefeated) instead of ending the run.
   static readonly MAX_LIVES = 3;
+  /** How often a boss also leaves a special weapon behind. Rolled fresh
+   * every time rather than scheduled, so it stays genuinely irregular:
+   * memoryless odds are what produce two in a row and then a long dry
+   * spell, which is what a rare drop should feel like. Across the
+   * campaign's ten bosses it works out at two or three. */
+  static readonly BOSS_SPECIAL_DROP_CHANCE = 0.22;
   livesRemaining = GameEngine.MAX_LIVES;
 
   // Humorous effects pass: air support is a rare, player-triggered
@@ -4084,6 +4092,16 @@ export class GameEngine {
       // early kills can never already afford one; coins stay a steady,
       // gradual reward, with bosses remaining the big lump-sum payout.
       this.spawnEnemyCoinDrop(enemy, Math.max(1, Math.round(enemy.scoreValue / 40)));
+      // The tougher the opponent, the better the odds it leaves a life
+      // behind. Only the genuinely heavy ones — a heart falling out of the
+      // first stickman of the level would make lives meaningless — and
+      // still a roll rather than a rule, so it stays a find.
+      if (enemy.scoreValue >= 200) {
+        const chance = 0.1 + (enemy.scoreValue - 200) * 0.0007;
+        if (Math.random() < chance) {
+          this.spawnPickup('heart', enemy.body.pos.x, -Math.PI / 2, 1);
+        }
+      }
     }
     this.phase = 'levelWon';
     // Visible on levels that skip the upgrade screen (see GameScreen) —
@@ -4136,10 +4154,18 @@ export class GameEngine {
   }
 
   /** Spawns a boss's rewards (section 1/13/16 of the brief): several
-   * individual coins that pop up and briefly scatter before settling, worth
-   * `def.coinReward` combined, plus — for bosses flagged `dropsHeart` — one
-   * extra life pickup. Not every boss drops a heart, so boss fights stay
-   * varied rather than every victory feeling identical. */
+   * individual coins that pop up and briefly scatter before settling, a
+   * heart, and — rarely — a special weapon.
+   *
+   * The heart is unconditional now. It used to be a per-boss flag, which
+   * meant beating the hardest fight in the game could hand you nothing but
+   * coins; a life back is the reward that actually matters after a boss,
+   * and it arrives the same way the coins do rather than as a separate
+   * kind of event: popped out of the body, scattered, then homing in.
+   *
+   * The weapon does not. It is a genuinely occasional thing — an
+   * independent roll each time, so it is streaky by nature: two bosses in
+   * a row might drop one and then six in a row might not. */
   private spawnBossRewards(enemy: Fighter, def: BossDef): void {
     const total = def.coinReward;
     const coinCount = Math.min(8, Math.max(4, Math.round(total / 22)));
@@ -4148,35 +4174,66 @@ export class GameEngine {
     for (let i = 0; i < coinCount; i++) {
       const value = baseValue + (i < remainder ? 1 : 0);
       const angle = (i / coinCount) * Math.PI * 2;
-      pickupCounter += 1;
-      this.pickups.push({
-        id: pickupCounter,
-        kind: 'coin',
-        pos: {
-          x: enemy.body.pos.x + Math.cos(angle) * (14 + Math.random() * 20),
-          y: this.layout.groundY - 90 - Math.random() * 30,
-        },
-        vel: { x: Math.cos(angle) * (60 + Math.random() * 40), y: -200 - Math.random() * 90 },
-        ageMs: 0,
-        value,
-        homing: false,
-      });
+      this.spawnPickup('coin', enemy.body.pos.x, angle, value);
     }
-    if (def.dropsHeart) {
-      pickupCounter += 1;
-      this.pickups.push({
-        id: pickupCounter,
-        kind: 'heart',
-        pos: { x: enemy.body.pos.x, y: this.layout.groundY - 130 },
-        vel: { x: 0, y: -170 },
-        ageMs: 0,
-        value: 1,
-        homing: false,
-      });
+    // Thrown clear of the coin scatter so it is never lost in the middle of
+    // the pile — the one thing here worth spotting.
+    this.spawnPickup('heart', enemy.body.pos.x, -Math.PI / 2, 1);
+
+    if (Math.random() < GameEngine.BOSS_SPECIAL_DROP_CHANCE) {
+      const id = this.pickBossSpecialDrop();
+      if (id) this.spawnPickup('special', enemy.body.pos.x, Math.PI / 2 + 0.4, 1, id);
     }
+
     this.particles.burst({ x: enemy.body.pos.x, y: this.layout.groundY - 70 }, 16, {
       color: '#ffd54f', shape: 'spark', size: 8, life: 0.5, maxLife: 0.5,
     });
+  }
+
+  /** One reward popped out of a defeated body. Shared by coins, hearts and
+   * weapon drops so all three arrive the same way — the reward stream reads
+   * as one thing rather than three different kinds of event. */
+  private spawnPickup(
+    kind: Pickup['kind'], x: number, angle: number, value: number, specialId?: SpecialWeaponId,
+  ): void {
+    pickupCounter += 1;
+    this.pickups.push({
+      id: pickupCounter,
+      kind,
+      pos: {
+        x: x + Math.cos(angle) * (14 + Math.random() * 20),
+        y: this.layout.groundY - 90 - Math.random() * 30,
+      },
+      vel: { x: Math.cos(angle) * (60 + Math.random() * 40), y: -200 - Math.random() * 90 },
+      ageMs: 0,
+      value,
+      homing: false,
+      specialId,
+    });
+  }
+
+  /** Which weapon a boss drops, when it drops one at all.
+   *
+   * Kept in tier with the campaign: a laser falling out of the first boss
+   * would flatten everything for the next ten levels. A little beyond what
+   * the shop currently sells, though, so a drop can genuinely be something
+   * that cannot be bought yet — which is the point of a rare drop.
+   *
+   * When both carry slots are already full it can only be one of the two
+   * kinds already held. That way a drop is never wasted on something the
+   * player cannot pick up, and the two-kind rule is never broken by one. */
+  private pickBossSpecialDrop(): SpecialWeaponId | null {
+    const stock = useAppStore.getState().save.specialWeaponStock;
+    const carried = stockKinds(stock);
+    if (carried.length >= SPECIAL_WEAPON_SLOTS) {
+      return carried[Math.floor(Math.random() * carried.length)];
+    }
+    const reach = this.levelIndex + 8;
+    const eligible = (Object.entries(SPECIAL_WEAPON_UNLOCK_LEVELS) as [string, SpecialWeaponId][])
+      .filter(([lvl]) => Number(lvl) <= reach)
+      .map(([, id]) => id);
+    if (eligible.length === 0) return null;
+    return eligible[Math.floor(Math.random() * eligible.length)];
   }
 
   /** Runs every tick unconditionally (like particles/shake/comicTexts
@@ -4219,6 +4276,18 @@ export class GameEngine {
   }
 
   private collectPickup(p: Pickup): void {
+    if (p.kind === 'special' && p.specialId) {
+      const def = SPECIAL_WEAPONS[p.specialId];
+      // Granting it also unlocks it for sale: a weapon the player has now
+      // physically held should not still read as "???" in the shop.
+      useAppStore.getState().grantSpecialWeapon(p.specialId);
+      this.showToast(`${def.icon} SELTENER FUND: ${def.name.toUpperCase()}!`, 2200);
+      audio.play('specialActivate');
+      audio.vibrate([25, 40, 25, 40, 60]);
+      this.particles.burst(p.pos, 18, { color: '#ffd54f', shape: 'spark', size: 8, life: 0.6, maxLife: 0.6 });
+      this.particles.burst(p.pos, 4, { color: '#fff', shape: 'ring', size: 26, life: 0.45, maxLife: 0.45 });
+      return;
+    }
     if (p.kind === 'coin') {
       useAppStore.getState().addCoins(p.value);
       this.coinFlashMs = 550;
@@ -4265,6 +4334,33 @@ export class GameEngine {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText('$', 0, 1);
+      } else if (p.kind === 'special' && p.specialId) {
+        // A rare drop has to look like a prize rather than another coin:
+        // a glowing capsule with the weapon's own icon in it, turning
+        // slowly so it catches the eye across the arena.
+        const t = performance.now() / 1000;
+        const glow = 0.55 + Math.sin(t * 4 + p.id) * 0.45;
+        ctx.save();
+        ctx.rotate(Math.sin(t * 1.4 + p.id) * 0.25);
+        const halo = ctx.createRadialGradient(0, 0, 3, 0, 0, 30);
+        halo.addColorStop(0, `rgba(255,235,150,${0.5 + glow * 0.4})`);
+        halo.addColorStop(1, 'rgba(255,193,7,0)');
+        ctx.fillStyle = halo;
+        ctx.beginPath();
+        ctx.arc(0, 0, 30, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(40,28,10,0.85)';
+        ctx.strokeStyle = `rgba(255,213,79,${0.7 + glow * 0.3})`;
+        ctx.lineWidth = 2.4;
+        ctx.beginPath();
+        ctx.roundRect(-15, -15, 30, 30, 9);
+        ctx.fill();
+        ctx.stroke();
+        ctx.font = '19px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(SPECIAL_WEAPONS[p.specialId].icon, 0, 1);
+        ctx.restore();
       } else {
         const pulse = 1 + Math.sin(performance.now() / 150) * 0.14;
         ctx.scale(pulse, pulse);

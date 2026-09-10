@@ -235,10 +235,9 @@ export interface BossDef extends Omit<EnemyDef, 'isBoss'> {
   arenaId: string;
   // Persistent-progression pass: coins scattered on defeat (see
   // GameEngine.spawnBossRewards) — scales with the boss's own difficulty.
-  // Not every boss also drops a heart, so a heart bonus stays a genuine
-  // surprise rather than a routine expectation.
+  // Every boss also drops a heart, and occasionally a special weapon;
+  // neither is per-boss data, so neither has a field here.
   coinReward: number;
-  dropsHeart?: boolean;
 }
 
 // ---------------------------------------------------------------------------

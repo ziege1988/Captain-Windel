@@ -59,6 +59,7 @@ interface AppState {
    * rather than a button that silently does nothing. */
   purchaseSpecialWeapon: (id: SpecialWeaponId) => 'ok' | 'locked' | 'tooPoor' | 'noSlot';
   consumeSpecialWeapon: (id: SpecialWeaponId) => boolean;
+  grantSpecialWeapon: (id: SpecialWeaponId) => void;
   upgradeWeapon: (id: WeaponId) => 'ok' | 'locked' | 'tooPoor' | 'maxed';
   discardSpecialWeapon: (id: SpecialWeaponId) => void;
   selectCharacter: (id: CharacterId) => void;
@@ -283,6 +284,25 @@ export const useAppStore = create<AppState>((set, get) => ({
     saveSaveData(next);
     set({ save: next });
     return true;
+  },
+
+  /** Grants one special weapon for free — a boss's rare drop, not a
+   * purchase, so it costs nothing and does not go through the slot check:
+   * the engine has already made sure the dropped kind is one the player
+   * can actually carry. Also unlocks it in the shop, since a weapon the
+   * player has physically held should not still read as "???" there. */
+  grantSpecialWeapon: (id) => {
+    const save = get().save;
+    const owned = save.specialWeaponStock[id] ?? 0;
+    const next = {
+      ...save,
+      specialWeaponStock: { ...save.specialWeaponStock, [id]: owned + 1 },
+      unlockedSpecialWeapons: save.unlockedSpecialWeapons.includes(id)
+        ? save.unlockedSpecialWeapons
+        : [...save.unlockedSpecialWeapons, id],
+    };
+    saveSaveData(next);
+    set({ save: next });
   },
 
   /** Sharpens one weapon by one level. Same shape as buying a special

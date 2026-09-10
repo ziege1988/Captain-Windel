@@ -84,7 +84,6 @@ export const BOSSES: Record<string, BossDef> = {
     deathText: 'Das Killer-Huhn taumelt, legt ein letztes Ei und plumpst um.',
     arenaId: 'desertBoss',
     coinReward: 100,
-    dropsHeart: true,
   },
   stoneKnight: {
     id: 'stoneKnight', name: 'Stein-Ritter', isBoss: true, aiType: 'boss',
@@ -113,7 +112,6 @@ export const BOSSES: Record<string, BossDef> = {
     deathText: 'Der Grab-Geist löst sich in Rauch auf.',
     arenaId: 'graveyardBoss',
     coinReward: 130,
-    dropsHeart: true,
   },
   // Data id "stormTitan" kept for wiring; visually now a lightning-charged
   // storm robot (see renderBoss.ts).
@@ -146,7 +144,6 @@ export const BOSSES: Record<string, BossDef> = {
     deathText: 'Das Chaos-Alien zerplatzt in bunte Fetzen.',
     arenaId: 'chaosArenaBoss',
     coinReward: 160,
-    dropsHeart: true,
   },
   windelNemesis: {
     id: 'windelNemesis', name: 'Captain Shadow', isBoss: true, aiType: 'boss',
@@ -162,7 +159,6 @@ export const BOSSES: Record<string, BossDef> = {
     deathText: 'Captain Shadow zerfällt in Rauch und Windeln fliegen durch die Luft.',
     arenaId: 'finalDarkBoss',
     coinReward: 200,
-    dropsHeart: true,
   },
 };
 
