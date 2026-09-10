@@ -105,6 +105,13 @@ export class Fighter {
    * relative position makes the enemy jitter in place when the player is
    * standing directly underneath it. */
   platformExitDir: -1 | 0 | 1 = 0;
+  /** A platform jump in progress: where it is aimed and how long the AI
+   * keeps steering it. Without holding the direction through the arc, the
+   * normal chase AI takes over the instant the feet leave the ground,
+   * turns the fighter back towards the player and it lands short of the
+   * ledge it just jumped for — over and over. */
+  platformJumpHoldMs = 0;
+  platformJumpTargetX = 0;
   /** How long the AI has been pressed up against an arena wall without
    * getting anywhere. Once it passes the threshold the engine commits the
    * fighter to walking back out (see wallEscapeMs), so a cornered enemy

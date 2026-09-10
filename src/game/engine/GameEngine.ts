@@ -302,22 +302,17 @@ const ARENA_WIDTH_MULT = 2;
 // exponential). Slow enough that it never snaps, fast enough that a running
 // fighter is never left at the edge of the frame.
 const CAMERA_FOLLOW_PER_SEC = 4.5;
-// Mario-style upper level: a jump-through floating island hanging over the
-// arena floor that either fighter can hop onto and fight on. The height is
-// set against the jump arc below (apex = jumpVel^2 / 2g), with real headroom
-// to spare so landing on it is comfortable rather than pixel-perfect.
+// Mario-style upper level: jump-through floating islands hanging over the
+// arena floor that either fighter can hop onto and fight on. Heights are
+// set against the jump arc below (apex = jumpVel^2 / 2g = 184px at the
+// current numbers), with real headroom to spare so landing is comfortable
+// rather than pixel-perfect.
 const PLATFORM_HEIGHT_ABOVE_GROUND = 145;
-// Roughly doubled from the original 0.17, after 3x turned out to be wider
-// than the screen itself: the island filled the whole field of view and
-// stopped reading as something floating in it. At this size the entire
-// island — both broken ends and open sky either side — fits on screen while
-// the camera is framing it, which is what makes it look like it is hanging
-// there. There is no room for two of them any more, so the upper level is
-// one island in the middle of the arena rather than a pair off to either
-// side. It floats, so it costs no ground space: the open running room
-// underneath is unchanged.
-const PLATFORM_WIDTH_FRACTION = 0.38; // of the whole arena width
 const JUMP_VELOCITY = -900;
+/** The tallest a single hop can climb, with headroom. Nothing in a layout
+ * may sit further than this above the surface it is reached from, or a tier
+ * becomes scenery nobody can get to. */
+const MAX_CLIMB = 155;
 // Land this many hits in a row without taking one and the next one lands as
 // a Multi-Schlag: one big blow instead of a normal one. Repeats, so a clean
 // run of six gives two of them.
@@ -328,13 +323,84 @@ const MULTI_STRIKE_DAMAGE_MULT = 2.5;
 const PUNCH_WORDS = ['POW!', 'BAM!', 'WUMM!', 'KRACH!', 'ZACK!'];
 const KICK_WORDS = ['TOCK!', 'PENG!', 'BUMS!'];
 
-/** The upper level: one wide island centred in the arena, with open sky and
- * open ground to either side of it. */
-function buildPlatforms(worldWidth: number, groundY: number): Platform[] {
-  const width = worldWidth * PLATFORM_WIDTH_FRACTION;
-  return [
-    { x: (worldWidth - width) / 2, width, y: groundY - PLATFORM_HEIGHT_ABOVE_GROUND },
-  ];
+// The sky changes with the ground. Rather than the same island hanging in
+// the same place in every arena, each landscape gets its own arrangement up
+// there — one big slab, a pair of smaller ones, two stacked with a step
+// between them, three strung across, or a staircase climbing away from the
+// floor.
+//
+// All positions are fractions of the arena width and offsets above the
+// floor, so a layout looks the same on every screen size, and the whole
+// thing is chosen from the level number rather than rolled — resize()
+// rebuilds the platforms and would otherwise reshuffle the arena under the
+// player's feet mid-fight.
+type PlatformLayoutId = 'single' | 'pair' | 'stacked' | 'trio' | 'tower';
+
+interface PlatformSpec {
+  /** Left edge and width, both as fractions of the arena width. */
+  x: number;
+  w: number;
+  /** Height above the arena floor. */
+  h: number;
+}
+
+const PLATFORM_LAYOUTS: Record<PlatformLayoutId, PlatformSpec[]> = {
+  // One wide island in the middle, open sky and open ground either side.
+  single: [{ x: 0.31, w: 0.38, h: PLATFORM_HEIGHT_ABOVE_GROUND }],
+  // Two smaller chunks, one over each half — the gap between them is the
+  // interesting part, because you have to come down to cross it.
+  pair: [
+    { x: 0.12, w: 0.24, h: 140 },
+    { x: 0.64, w: 0.24, h: 140 },
+  ],
+  // Two levels. They overlap horizontally so the upper one is reachable
+  // from the lower, and are offset so both are visible at once instead of
+  // one hiding under the other.
+  stacked: [
+    { x: 0.20, w: 0.30, h: 128 },
+    { x: 0.36, w: 0.22, h: 128 + 138 },
+  ],
+  // Three small ones strung across the whole arena.
+  trio: [
+    { x: 0.08, w: 0.17, h: 132 },
+    { x: 0.41, w: 0.17, h: 132 },
+    { x: 0.74, w: 0.17, h: 132 },
+  ],
+  // A staircase climbing away from the floor. The top step cannot be
+  // reached from the ground at all — only by taking the stairs. Each step
+  // overlaps the one below it, because a jump only carries about 110px
+  // forward while it is high enough to land on the next tier: steps set
+  // side by side with a gap between them look like stairs and play like a
+  // pit.
+  tower: [
+    { x: 0.08, w: 0.24, h: 110 },
+    { x: 0.26, w: 0.20, h: 110 + 125 },
+    { x: 0.42, w: 0.18, h: 110 + 125 + 118 },
+  ],
+};
+
+// Cycled rather than rolled, so consecutive levels are guaranteed to look
+// different up there instead of the same one coming up twice by chance.
+const PLATFORM_LAYOUT_ORDER: PlatformLayoutId[] = [
+  'single', 'pair', 'stacked', 'trio', 'single', 'tower', 'pair', 'stacked',
+];
+// A boss arena stays legible: one island, or two at the same height. A
+// staircase turns a boss fight into a platforming puzzle, and a boss is
+// half again the size of a normal enemy with no head for heights.
+const BOSS_PLATFORM_LAYOUTS: PlatformLayoutId[] = ['single', 'pair'];
+
+export function platformLayoutFor(levelIndex: number, isBoss: boolean): PlatformLayoutId {
+  const i = Math.max(0, levelIndex - 1);
+  return isBoss
+    ? BOSS_PLATFORM_LAYOUTS[i % BOSS_PLATFORM_LAYOUTS.length]
+    : PLATFORM_LAYOUT_ORDER[i % PLATFORM_LAYOUT_ORDER.length];
+}
+
+/** The upper level(s) for one arena, ordered lowest first. */
+function buildPlatforms(worldWidth: number, groundY: number, layoutId: PlatformLayoutId): Platform[] {
+  return PLATFORM_LAYOUTS[layoutId]
+    .map((spec) => ({ x: worldWidth * spec.x, width: worldWidth * spec.w, y: groundY - spec.h }))
+    .sort((a, b) => b.y - a.y);
 }
 
 /** A comic hit-impact: a starburst that punches out from the contact point,
@@ -420,12 +486,18 @@ export class GameEngine {
   private viewWidth = FALLBACK_WIDTH / ARENA_ZOOM;
   /** Left edge of the camera window, in world coordinates. */
   private cameraX = 0;
+  /** Which arrangement of floating islands this level has. Held on the
+   * engine rather than derived inside resize(), because resize rebuilds
+   * the platforms and must reproduce exactly the same ones — a layout that
+   * reshuffled on a rotate would move the ground out from under whoever
+   * was standing on it. */
+  private platformLayout: PlatformLayoutId = 'single';
 
   private layout: ArenaLayout = {
     width: FALLBACK_WIDTH * ARENA_WIDTH_MULT, height: FALLBACK_HEIGHT,
     groundY: FALLBACK_HEIGHT * GROUND_FRACTION,
     minX: ARENA_SIDE_PADDING, maxX: FALLBACK_WIDTH * ARENA_WIDTH_MULT - ARENA_SIDE_PADDING,
-    platforms: buildPlatforms(FALLBACK_WIDTH * ARENA_WIDTH_MULT, FALLBACK_HEIGHT * GROUND_FRACTION),
+    platforms: buildPlatforms(FALLBACK_WIDTH * ARENA_WIDTH_MULT, FALLBACK_HEIGHT * GROUND_FRACTION, 'single'),
   };
 
   player: Fighter;
@@ -601,7 +673,7 @@ export class GameEngine {
       maxX: worldWidth - ARENA_SIDE_PADDING,
       viewWidth,
       cameraX: this.cameraX,
-      platforms: buildPlatforms(worldWidth, worldHeight * GROUND_FRACTION),
+      platforms: buildPlatforms(worldWidth, worldHeight * GROUND_FRACTION, this.platformLayout),
     };
     this.cameraX = this.clampCamera(this.desiredCameraX());
 
@@ -665,6 +737,16 @@ export class GameEngine {
     this.arenaId = level.arenaId;
     this.isBossLevel = level.isBoss;
     this.bossDefId = level.bossId ?? null;
+    // New landscape, new sky: the islands are rearranged for every level,
+    // so the arena above the floor changes along with the one below it.
+    this.platformLayout = platformLayoutFor(index, level.isBoss);
+    this.layout.platforms = buildPlatforms(this.layout.width, this.layout.groundY, this.platformLayout);
+    // Anyone standing on a platform that no longer exists comes down.
+    for (const f of [this.player, this.enemy]) {
+      if (!f) continue;
+      f.body.platformY = null;
+      f.platformExitDir = 0;
+    }
     this.projectiles = [];
     this.hazards = [];
     // Deliberately NOT resetting pickups here: on a normal (non-boss) kill
@@ -2988,6 +3070,25 @@ export class GameEngine {
     const playerPlatform = this.player.body.platformY ?? null;
     const enemyPlatform = enemy.body.platformY ?? null;
 
+    // A jump already committed to keeps its heading all the way through the
+    // arc. Handing control back mid-flight let the chase AI turn the
+    // fighter around towards the player and land it short of the very
+    // ledge it had just jumped for, which on a staircase meant hopping on
+    // the spot for ever.
+    if (enemy.platformJumpHoldMs > 0) {
+      enemy.platformJumpHoldMs -= dtMs;
+      if (!enemy.body.grounded) {
+        const dir = Math.sign(enemy.platformJumpTargetX - enemy.body.pos.x);
+        if (dir !== 0) {
+          enemy.body.vel.x = dir * enemy.effectiveMoveSpeed();
+          enemy.facing = dir as 1 | -1;
+        }
+        enemy.isBlocking = false;
+        return true;
+      }
+      enemy.platformJumpHoldMs = 0;
+    }
+
     // Once committed to stepping off, keep walking that way until actually
     // down. Handing control back to the normal AI the moment the feet leave
     // the deck used to steer the enemy straight back over the edge, where
@@ -3007,11 +3108,19 @@ export class GameEngine {
 
     if (!enemy.body.grounded) return false;
 
+    // Where each of them is actually standing, floor included, so the two
+    // can be compared as heights rather than as "platform or not". With
+    // several tiers in the air, "the player is not on a platform" is no
+    // longer the same question as "the player is below me".
+    const enemySurface = enemyPlatform ?? enemy.body.groundY;
+    const playerSurface = playerPlatform ?? this.player.body.groundY;
+
     // Coming back down. Without this the enemy would happily stand on the
-    // ledge directly above a player it can no longer reach (the hit test
-    // gates on height) and the fight would simply stop — it walks to the
-    // nearer edge and steps off instead.
-    if (enemyPlatform != null && playerPlatform == null) {
+    // ledge above a player it can no longer reach (the hit test gates on
+    // height) and the fight would simply stop — it walks to the nearer edge
+    // and steps off instead. One tier at a time: stepping off a stair drops
+    // it onto the next one down, which is exactly what should happen.
+    if (enemyPlatform != null && playerSurface > enemySurface + 40) {
       const here = platforms.find((p) => p.y === enemyPlatform && enemy.body.pos.x >= p.x && enemy.body.pos.x <= p.x + p.width);
       if (here) {
         if (enemy.platformExitDir === 0) {
@@ -3035,23 +3144,55 @@ export class GameEngine {
       }
     }
 
-    if (playerPlatform == null || enemyPlatform != null) return false;
-    if (enemy.platformJumpCooldownMs > 0) return false;
+    // Climbing. Any time the player is meaningfully above, look for a step
+    // up — which on a staircase layout means the enemy follows one tier at
+    // a time rather than only ever hopping up from the floor.
+    if (playerSurface > enemySurface - 40) return false;
 
-    const target = platforms.find(
-      (p) => p.y === playerPlatform
-        && this.player.body.pos.x >= p.x
-        && this.player.body.pos.x <= p.x + p.width,
+    // Steps it could actually take from where it is standing: above the
+    // current surface, within one hop, and not already past the player.
+    // Aiming straight at the player's own tier is what made an enemy stand
+    // under the top of a staircase jumping at something three hops away.
+    const steps = platforms.filter(
+      (p) => p.y < enemySurface - 20 && enemySurface - p.y <= MAX_CLIMB && p.y >= playerSurface,
     );
-    if (!target) return false;
-    // Only jump from a spot the arc actually clears onto — otherwise keep
-    // running (the normal AI is already closing the horizontal gap).
-    if (enemy.body.pos.x < target.x - 30 || enemy.body.pos.x > target.x + target.width + 30) return false;
+    if (steps.length === 0) return false;
+
+    const overhead = steps.filter(
+      (p) => enemy.body.pos.x >= p.x - 30 && enemy.body.pos.x <= p.x + p.width + 30,
+    );
+    if (overhead.length === 0) {
+      // Nothing to jump onto from this spot, so go and find the way up.
+      // Without this the enemy simply walks under the player and stops —
+      // the normal AI only ever closes the horizontal gap, and on a
+      // staircase the stairs are somewhere else entirely. Deliberately
+      // returns true: this IS the enemy's move this frame.
+      let nearest = steps[0];
+      let best = Infinity;
+      for (const p of steps) {
+        const d = Math.abs(p.x + p.width / 2 - enemy.body.pos.x);
+        if (d < best) { best = d; nearest = p; }
+      }
+      const dir: 1 | -1 = nearest.x + nearest.width / 2 >= enemy.body.pos.x ? 1 : -1;
+      enemy.body.vel.x = dir * enemy.effectiveMoveSpeed();
+      enemy.facing = dir;
+      enemy.setAnim('run');
+      enemy.isBlocking = false;
+      return true;
+    }
+
+    // Standing under one or more: take the lowest, i.e. the next step up.
+    let target = overhead[0];
+    for (const p of overhead) if (p.y > target.y) target = p;
+    if (enemy.platformJumpCooldownMs > 0) return false;
 
     enemy.body.vel.y = JUMP_VELOCITY;
     enemy.body.grounded = false;
     enemy.setAnim('jump', true);
     enemy.platformJumpCooldownMs = 1500 + Math.random() * 900;
+    // Aim at the middle of the ledge and hold that heading until it lands.
+    enemy.platformJumpTargetX = target.x + target.width / 2;
+    enemy.platformJumpHoldMs = 1200;
     audio.play('jump');
     return true;
   }

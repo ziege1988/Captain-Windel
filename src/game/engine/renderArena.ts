@@ -404,6 +404,109 @@ function drawPlatform(
     }
   }
 
+  // --- What grows (or does not) on this particular landscape --------------
+  // A chunk torn out of a glacier is not a grass slab tinted blue. The turf
+  // already takes the arena's own ground colours; these are the details
+  // that make each one read as a piece of THAT landscape hanging in the
+  // air rather than the same island recoloured.
+  if (arena.palette === 'ice') {
+    // A crust of snow along the top, and icicles hanging off the break.
+    ctx.fillStyle = dark ? 'rgba(200,230,245,0.7)' : '#f4fbff';
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y + 1);
+    for (let i = 0; i <= steps; i++) {
+      const x = p.x + (p.width * i) / steps;
+      ctx.lineTo(x, p.y - 1 - hash01(seed + i * 67 + 12) * 5);
+    }
+    ctx.lineTo(p.x + p.width, p.y + 1);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = dark ? 'rgba(160,215,240,0.75)' : 'rgba(225,246,255,0.9)';
+    ctx.strokeStyle = 'rgba(120,180,210,0.6)';
+    ctx.lineWidth = 0.8;
+    for (let i = 0; i < Math.round(p.width / 26); i++) {
+      const h1 = hash01(seed + i * 71 + 401);
+      const h2 = hash01(seed + i * 73 + 4001);
+      const ix = p.x + (0.06 + h1 * 0.88) * p.width;
+      const top = p.y + toothDepth(Math.round(((ix - p.x) / p.width) * steps)) - 4;
+      const len = 8 + h2 * 20;
+      ctx.beginPath();
+      ctx.moveTo(ix - 2.6, top);
+      ctx.lineTo(ix + 2.6, top);
+      ctx.lineTo(ix, top + len);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+  } else if (arena.palette === 'desert') {
+    // Dry sand drifting off the edges, and a couple of hardy tufts.
+    ctx.fillStyle = dark ? 'rgba(180,150,100,0.35)' : 'rgba(240,215,160,0.55)';
+    for (let i = 0; i < 3; i++) {
+      const h1 = hash01(seed + i * 79 + 21);
+      const dx = p.x + (0.12 + h1 * 0.76) * p.width;
+      const w = 12 + h1 * 26;
+      ctx.beginPath();
+      ctx.ellipse(dx, p.y - 2, w, 3 + h1 * 3, 0, Math.PI, 0);
+      ctx.fill();
+    }
+    // Sand trickling off the broken underside, endlessly.
+    ctx.strokeStyle = dark ? 'rgba(190,165,115,0.4)' : 'rgba(226,196,140,0.6)';
+    ctx.lineWidth = 1.4;
+    for (let i = 0; i < 5; i++) {
+      const h1 = hash01(seed + i * 83 + 211);
+      const cycle = (timeSec * (0.6 + h1 * 0.5) + h1 * 3) % 1;
+      const dx = p.x + (0.15 + h1 * 0.7) * p.width;
+      const from = p.y + toothDepth(Math.round(((dx - p.x) / p.width) * steps));
+      ctx.globalAlpha = (1 - cycle) * 0.8;
+      ctx.beginPath();
+      ctx.moveTo(dx, from + cycle * 20);
+      ctx.lineTo(dx + (h1 - 0.5) * 6, from + cycle * 20 + 10);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = 'rgba(150,130,70,0.65)';
+    ctx.lineWidth = 1.4;
+    for (let i = 0; i < Math.max(3, Math.round(p.width / 60)); i++) {
+      const h1 = hash01(seed + i * 89 + 31);
+      const bx = p.x + (0.1 + h1 * 0.8) * p.width;
+      for (const off of [-3, 0, 3]) {
+        ctx.beginPath();
+        ctx.moveTo(bx, p.y);
+        ctx.quadraticCurveTo(bx + off, p.y - 5, bx + off * 2.2, p.y - 9 - h1 * 4);
+        ctx.stroke();
+      }
+    }
+  } else if (arena.palette === 'volcano') {
+    // Cooling rock: the cracks in the underside still glow, and embers lift
+    // off it. The glow pulses, so the chunk reads as hot rather than rusty.
+    const pulse = 0.55 + 0.45 * Math.sin(timeSec * 1.6 + seed);
+    ctx.strokeStyle = `rgba(255,112,40,${0.5 + pulse * 0.4})`;
+    ctx.lineWidth = 2.2;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < Math.max(3, Math.round(p.width / 45)); i++) {
+      const h1 = hash01(seed + i * 91 + 41);
+      const h2 = hash01(seed + i * 97 + 411);
+      const cx = p.x + (0.1 + h1 * 0.8) * p.width;
+      const cy = p.y + grassBand + 6 + h2 * soilDepth * 0.7;
+      ctx.beginPath();
+      ctx.moveTo(cx - 8 - h2 * 8, cy);
+      ctx.lineTo(cx, cy + (h1 - 0.5) * 8);
+      ctx.lineTo(cx + 7 + h1 * 9, cy + (h2 - 0.5) * 7);
+      ctx.stroke();
+    }
+    for (let i = 0; i < 6; i++) {
+      const h1 = hash01(seed + i * 101 + 51);
+      const cycle = (timeSec * (0.35 + h1 * 0.35) + h1 * 4) % 1;
+      const ex = p.x + (0.1 + h1 * 0.8) * p.width + Math.sin(timeSec * 1.4 + h1 * 9) * 7;
+      ctx.globalAlpha = (1 - cycle) * 0.85;
+      ctx.fillStyle = h1 > 0.6 ? '#ffd54f' : '#ff7043';
+      ctx.beginPath();
+      ctx.arc(ex, p.y - 4 - cycle * 52, 1.4 + h1 * 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
   // In the wet, water runs off the broken edge and drips into the air.
   if (weather.rain > 0.4) {
     ctx.strokeStyle = `rgba(200,225,255,${0.32 * weather.rain})`;
