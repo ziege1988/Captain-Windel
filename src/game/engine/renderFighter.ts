@@ -1762,7 +1762,14 @@ export function drawWeaponInHand(ctx: CanvasRenderingContext2D, f: Fighter, hand
         ctx.stroke();
       }
 
-      if (pull > 0.05) {
+      // The nocked arrow is on the string only while the string is being
+      // DRAWN. It used to linger through the release as well, so for the
+      // first 70ms of the shot there were two arrows on screen — one still
+      // sitting on a bow that looked fully drawn, and one already downrange.
+      // The eye follows the one on the string, and the flying one then reads
+      // as something that left late rather than as this shot.
+      const stillNocked = f.anim === 'attack' && f.animTimeMs < BOW_LOOSE_MS;
+      if (pull > 0.05 && stillNocked) {
         ctx.strokeStyle = '#6d4c2f';
         ctx.lineWidth = 1.6;
         ctx.beginPath();

@@ -133,7 +133,7 @@ interface SignatureDef {
 }
 
 const SIGNATURE: Record<CharacterId, SignatureDef> = {
-  windelmann: { anim: 'fart', word: 'PFFFRT!', color: '#9ccc65', shape: 'cloud', releaseMs: 620, totalMs: 1250 },
+  windelmann: { anim: 'fart', word: 'PFFFRT!', color: '#9ccc65', shape: 'cloud', releaseMs: 520, totalMs: 1250 },
   grandpa: { anim: 'dentures', word: 'KLACK!', color: '#eceff1', shape: 'bite', releaseMs: 560, totalMs: 1000 },
   punk: { anim: 'rockPose', word: 'WRÄÄH!', color: '#ce93d8', shape: 'ring', releaseMs: 620, totalMs: 1350 },
   brawler: { anim: 'stomp', word: 'RUMMS!', color: '#ffb74d', shape: 'dust', releaseMs: 540, totalMs: 1400 },
@@ -145,29 +145,37 @@ function fireSignature(s: SceneRuntime, sig: SignatureDef): void {
   s.say(sig.word, s.playerX + 120, s.groundY - 150, sig.color);
   const ox = s.playerX + 40;
   const oy = s.groundY - 70;
+  // Every one of these used to trickle out: the puffs were spawned with
+  // staggered negative ages so only one existed on the frame of the release,
+  // they started small and half transparent, and they drifted at 70-220px/s
+  // across a 135px gap. Measured, the front of Windelmann's cloud was still
+  // 90px short of the challenger when the pose ended — so what you saw was a
+  // faint speck while he was bent over, and a cloud once he was standing
+  // again. They all leave in one burst now, and fast enough to arrive while
+  // the move is still happening.
   if (sig.shape === 'bite') {
     s.fx.push({
       kind: 'bite', x: s.playerX + 46, y: s.groundY - 112,
-      vx: 260, stopX: s.enemy.body.pos.x - 24, age: 0, life: 1600,
+      vx: 520, stopX: s.enemy.body.pos.x - 24, age: 0, life: 1600,
     });
   } else if (sig.shape === 'ring') {
     for (let i = 0; i < 3; i++) {
-      s.fx.push({ kind: 'ring', x: ox, y: oy, r: 14 + i * 10, age: -i * 90, life: 720, color: sig.color });
+      s.fx.push({ kind: 'ring', x: ox, y: oy, r: 14 + i * 10, age: -i * 40, life: 520, color: sig.color });
     }
   } else if (sig.shape === 'cloud') {
-    for (let i = 0; i < 16; i++) {
+    for (let i = 0; i < 18; i++) {
       s.fx.push({
         kind: 'puff', x: ox, y: oy + (Math.random() - 0.5) * 34,
-        vx: 70 + Math.random() * 150, vy: -30 + Math.random() * 60,
-        r: 10 + Math.random() * 16, age: -i * 18, life: 1100, color: 'rgba(156,204,101,0.55)',
+        vx: 320 + Math.random() * 380, vy: -40 + Math.random() * 80,
+        r: 13 + Math.random() * 16, age: 0, life: 900, color: 'rgba(150,205,80,0.8)',
       });
     }
   } else {
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < 16; i++) {
       s.fx.push({
         kind: 'puff', x: ox + Math.random() * 180, y: s.groundY - 10,
-        vx: 30 + Math.random() * 150, vy: -140 - Math.random() * 90,
-        r: 5 + Math.random() * 10, age: -i * 14, life: 820, color: 'rgba(210,180,140,0.65)',
+        vx: 90 + Math.random() * 260, vy: -170 - Math.random() * 110,
+        r: 7 + Math.random() * 11, age: 0, life: 760, color: 'rgba(214,182,138,0.8)',
       });
     }
   }
@@ -414,9 +422,13 @@ const SCENES: MenuScene[] = [
       // so the bow had long since come down before anything flew.
       if (s.player.anim === 'attack' && s.player.animTimeMs >= BOW_LOOSE_MS) {
         s.once('loose', () => {
+          // Fast enough to read as a shot rather than a thrown stick: at the
+          // old 560px/s it took a sixth of a second to cross the gap, which
+          // next to a bow that had already sprung back looked like the arrow
+          // left late.
           s.fx.push({
             kind: 'shot', x: s.playerX + 50, y: s.groundY - 96,
-            vx: 560, stopX: s.enemy.body.pos.x - 26, age: 0, life: 1400, color: '#f1c40f',
+            vx: 1150, stopX: s.enemy.body.pos.x - 26, age: 0, life: 1400, color: '#f1c40f',
           });
           s.mem.looseP = p;
         });
@@ -713,7 +725,7 @@ function drawFx(ctx: CanvasRenderingContext2D, fx: MenuFx[], dt: number, groundY
         ctx.strokeStyle = f.color;
         ctx.lineWidth = 4 * fade + 1;
         ctx.beginPath();
-        ctx.ellipse(f.x, f.y, f.r + k * 190, (f.r + k * 190) * 0.62, 0, 0, Math.PI * 2);
+        ctx.ellipse(f.x, f.y, f.r + k * 260, (f.r + k * 260) * 0.62, 0, 0, Math.PI * 2);
         ctx.stroke();
         break;
       }
