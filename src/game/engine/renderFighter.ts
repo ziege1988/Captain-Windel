@@ -92,7 +92,47 @@ function smoothPose(f: Fighter, target: Pose, dtSec: number): Pose {
   return smoothed;
 }
 
-function computePose(f: Fighter): Pose {
+// --- stride ---------------------------------------------------------------
+// The run cycle used to advance on the wall clock at a fixed rate, which
+// lines up with the ground at exactly one speed. Move slower than that — a
+// slowed fighter, a scripted menu scene, anything drawn at a larger scale —
+// and the feet sweep further than the body travels, which is precisely what
+// makes a runner look like they are skating over the floor rather than
+// walking on it.
+//
+// The phase is therefore advanced by ground covered, not by time. The
+// reference values below are the game's own base speed and the rate the
+// gait was authored at, so a fighter running at base speed and scale 1 (i.e.
+// everyone in a normal fight) looks exactly as it always did.
+const STRIDE_REF_SPEED = 210; // BALANCE.player.baseStats.moveSpeed
+// The planted foot is drawn at local x = legFrontX = FOOT_REACH * sin(phase)
+// (see drawShoe below), so over half a cycle it travels 2 * FOOT_REACH
+// backwards relative to the body. For the foot to stay put on the ground the
+// body has to cover exactly that much in the same half cycle, which fixes
+// the rate rather than leaving it a hand-tuned number: it used to be 16,
+// about 15% too slow, so even at base speed the feet skated forwards a
+// little under the body.
+const STRIDE_FOOT_REACH = 18;
+const STRIDE_REF_RATE = (Math.PI * STRIDE_REF_SPEED) / (2 * STRIDE_FOOT_REACH);
+// Never let the legs stop dead: a fighter can hold 'run' for a frame with no
+// horizontal speed (a wall, a scripted hold), and a frozen mid-stride pose
+// reads worse than a slow amble.
+const STRIDE_MIN_FACTOR = 0.25;
+const stridePhaseCache = new WeakMap<Fighter, number>();
+
+function advanceStride(f: Fighter, dtSec: number): number {
+  if (f.anim !== 'run') {
+    stridePhaseCache.set(f, 0);
+    return 0;
+  }
+  const factor = Math.max(STRIDE_MIN_FACTOR, Math.abs(f.body.vel.x) / STRIDE_REF_SPEED);
+  const rate = (STRIDE_REF_RATE * factor) / Math.max(0.2, f.scale);
+  const next = (stridePhaseCache.get(f) ?? 0) + rate * Math.min(0.05, Math.max(0, dtSec));
+  stridePhaseCache.set(f, next);
+  return next;
+}
+
+function computePose(f: Fighter, stride: number): Pose {
   const t = f.animTimeMs / 1000;
   const cycle = Math.sin(t * 9);
   switch (f.anim) {
@@ -109,7 +149,7 @@ function computePose(f: Fighter): Pose {
       // body (mid-stride) and straightening as it reaches out to plant,
       // and (c) a touch of hip/shoulder counter-rotation and a head that
       // stays basically level but still visibly rides along with the gait.
-      const s = Math.sin(t * 16);
+      const s = Math.sin(stride);
       const strideK = 1 - Math.abs(s); // 0 at full extension, 1 at mid-stride
       return {
         ...STAND,
@@ -118,8 +158,8 @@ function computePose(f: Fighter): Pose {
         headOffsetY: Math.abs(s) * -1.2,
         armFrontX: -11 * s, armFrontY: 20 - strideK * 4,
         armBackX: 11 * s, armBackY: 20 - strideK * 4,
-        legFrontX: 18 * s, legFrontY: 38 - strideK * 6,
-        legBackX: -18 * s, legBackY: 38 - strideK * 6,
+        legFrontX: STRIDE_FOOT_REACH * s, legFrontY: 38 - strideK * 6,
+        legBackX: -STRIDE_FOOT_REACH * s, legBackY: 38 - strideK * 6,
         bendFront: 0.16 + strideK * 0.26,
         bendBack: 0.16 + strideK * 0.26,
       };
@@ -1093,7 +1133,7 @@ function footTiltAngle(dx: number, dy: number): number {
  * straight to the target pose (e.g. for a one-off static preview render). */
 export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec = 0): void {
   if (f.deathPhase === 'done') return;
-  const target = computePose(f);
+  const target = computePose(f, advanceStride(f, dtSec));
   const pose = smoothPose(f, target, dtSec);
   const scale = f.scale;
   const x = f.body.pos.x;

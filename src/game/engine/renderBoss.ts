@@ -68,7 +68,33 @@ function smoothPose(f: Fighter, target: BossPose, dtSec: number): BossPose {
   return smoothed;
 }
 
-function computeBossPose(f: Fighter): BossPose {
+// Same stride problem, same fix as renderFighter: a run cycle advanced on
+// the wall clock at a fixed rate only meets the ground at one speed, and
+// bosses run anywhere between 100 and 210 px/s. The planted foot is drawn at
+// local x = legFrontX = FOOT_REACH * sin(phase) (see drawBossShoe), so over
+// half a cycle it travels 2 * FOOT_REACH backwards relative to the body; the
+// body has to cover exactly that much in the same half cycle or the foot
+// drags. At the old flat rate of 8 a 140 px/s boss slid a quarter of a
+// stride forward with every step.
+const STRIDE_REF_SPEED = 210;
+const STRIDE_FOOT_REACH = 22;
+const STRIDE_REF_RATE = (Math.PI * STRIDE_REF_SPEED) / (2 * STRIDE_FOOT_REACH);
+const STRIDE_MIN_FACTOR = 0.25;
+const stridePhaseCache = new WeakMap<Fighter, number>();
+
+function advanceStride(f: Fighter, dtSec: number): number {
+  if (f.anim !== 'run') {
+    stridePhaseCache.set(f, 0);
+    return 0;
+  }
+  const factor = Math.max(STRIDE_MIN_FACTOR, Math.abs(f.body.vel.x) / STRIDE_REF_SPEED);
+  const rate = (STRIDE_REF_RATE * factor) / Math.max(0.2, f.scale);
+  const next = (stridePhaseCache.get(f) ?? 0) + rate * Math.min(0.05, Math.max(0, dtSec));
+  stridePhaseCache.set(f, next);
+  return next;
+}
+
+function computeBossPose(f: Fighter, stride: number): BossPose {
   const t = f.animTimeMs / 1000;
   switch (f.anim) {
     case 'idle': {
@@ -76,11 +102,12 @@ function computeBossPose(f: Fighter): BossPose {
       return { ...STAND, hipY: bob, headOffsetY: bob * 0.5 };
     }
     case 'run': {
-      const s = Math.sin(t * 8);
+      const s = Math.sin(stride);
       return {
         ...STAND, bodyLean: 0.14, hipY: Math.abs(s) * -4,
         armFrontX: 15 * s, armFrontY: 30, armBackX: -15 * s, armBackY: 30,
-        legFrontX: 22 * s, legFrontY: 42, legBackX: -22 * s, legBackY: 42,
+        legFrontX: STRIDE_FOOT_REACH * s, legFrontY: 42,
+        legBackX: -STRIDE_FOOT_REACH * s, legBackY: 42,
       };
     }
     case 'attack':
@@ -1239,7 +1266,7 @@ function drawBossStatusOverlay(ctx: CanvasRenderingContext2D, f: Fighter, should
 
 export function renderBoss(ctx: CanvasRenderingContext2D, f: Fighter, dtSec = 0): void {
   if (f.deathPhase === 'done') return;
-  const target = computeBossPose(f);
+  const target = computeBossPose(f, advanceStride(f, dtSec));
   const pose = smoothPose(f, target, dtSec);
   const scale = f.scale;
   const x = f.body.pos.x;
