@@ -20,7 +20,7 @@ import { HitStop, ScreenShake } from '../effects/screenEffects';
 import { audio, type SoundId } from '../audio/audioManager';
 import { renderArena, type ArenaLayout } from './renderArena';
 import { pickRandomWeather, type WeatherState, type WeatherId } from './weather';
-import { renderFighter, drawDentures } from './renderFighter';
+import { renderFighter, drawDentures, BOW_LOOSE_MS } from './renderFighter';
 import { renderBoss } from './renderBoss';
 import { applyDefense, resolveHit, scoreForHit } from './combatMath';
 
@@ -2630,7 +2630,12 @@ export class GameEngine {
 
     const shape = weapon.shape;
     if (shape === 'ranged' || shape === 'boomerang') {
-      window.setTimeout(() => this.spawnProjectile(f, shape), 160);
+      // The arrow leaves the bow on the frame the string visibly snaps back,
+      // not on a hard-coded offset that happens to be earlier: at the old
+      // flat 160ms it was already in flight while the bow was still at full
+      // draw. Everything else keeps its own short wind-up.
+      const delay = weapon.id === 'bow' ? BOW_LOOSE_MS : 160;
+      window.setTimeout(() => this.spawnProjectile(f, shape), delay);
     }
   }
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Fighter } from '../game/entities/Fighter';
 import { BALANCE } from '../data/balance';
-import { drawDentures, renderFighter } from '../game/engine/renderFighter';
+import { BOW_LOOSE_MS, drawDentures, renderFighter } from '../game/engine/renderFighter';
 import { renderArena, type ArenaLayout } from '../game/engine/renderArena';
 import { ARENAS } from '../data/arenas';
 import { pickRandomWeather, type WeatherState } from '../game/engine/weather';
@@ -60,6 +60,12 @@ interface SceneRuntime {
   farX: number;
   fx: MenuFx[];
   say: (text: string, x: number, y: number, color?: string) => void;
+  /** Fire something exactly once per scene. Beats fire at a fixed point in
+   * the scene; this is for moments that have to key off an animation's own
+   * clock instead, because the animation decides when they happen. */
+  once: (key: string, fn: () => void) => void;
+  /** Scratch shared between frame() and the beats, cleared per scene. */
+  mem: Record<string, number>;
 }
 
 interface MenuScene {
@@ -110,12 +116,62 @@ function runLeg(
 /** Signature move of the selected hero, so the menu shows off *your*
  * character rather than always Windelmann's. Mirrors the mapping in
  * GameEngine.useCharacterAbility. */
-const SIGNATURE: Record<CharacterId, { anim: AnimState; word: string; color: string; shape: 'cloud' | 'ring' | 'dust' | 'bite' }> = {
-  windelmann: { anim: 'fart', word: 'PFFFRT!', color: '#9ccc65', shape: 'cloud' },
-  grandpa: { anim: 'dentures', word: 'KLACK!', color: '#eceff1', shape: 'bite' },
-  punk: { anim: 'rockPose', word: 'WRÄÄH!', color: '#ce93d8', shape: 'ring' },
-  brawler: { anim: 'stomp', word: 'RUMMS!', color: '#ffb74d', shape: 'dust' },
+interface SignatureDef {
+  anim: AnimState;
+  word: string;
+  color: string;
+  shape: 'cloud' | 'ring' | 'dust' | 'bite';
+  /** When the payload actually leaves the body, in ms into the animation.
+   * Taken from the pose itself in renderFighter — the middle of the fart's
+   * release window, the frame the dentures are spat, the strum, the slam.
+   * The effect used to be pinned to a fixed point in the scene instead,
+   * which for Windelmann put the cloud on screen a good half second after
+   * he had finished and straightened back up. */
+  releaseMs: number;
+  /** Length of the whole pose, so he stands up when it is over. */
+  totalMs: number;
+}
+
+const SIGNATURE: Record<CharacterId, SignatureDef> = {
+  windelmann: { anim: 'fart', word: 'PFFFRT!', color: '#9ccc65', shape: 'cloud', releaseMs: 620, totalMs: 1250 },
+  grandpa: { anim: 'dentures', word: 'KLACK!', color: '#eceff1', shape: 'bite', releaseMs: 560, totalMs: 1000 },
+  punk: { anim: 'rockPose', word: 'WRÄÄH!', color: '#ce93d8', shape: 'ring', releaseMs: 620, totalMs: 1350 },
+  brawler: { anim: 'stomp', word: 'RUMMS!', color: '#ffb74d', shape: 'dust', releaseMs: 540, totalMs: 1400 },
 };
+
+/** Everything the signature move throws out, spawned at the moment the body
+ * actually releases it. */
+function fireSignature(s: SceneRuntime, sig: SignatureDef): void {
+  s.say(sig.word, s.playerX + 120, s.groundY - 150, sig.color);
+  const ox = s.playerX + 40;
+  const oy = s.groundY - 70;
+  if (sig.shape === 'bite') {
+    s.fx.push({
+      kind: 'bite', x: s.playerX + 46, y: s.groundY - 112,
+      vx: 260, stopX: s.enemy.body.pos.x - 24, age: 0, life: 1600,
+    });
+  } else if (sig.shape === 'ring') {
+    for (let i = 0; i < 3; i++) {
+      s.fx.push({ kind: 'ring', x: ox, y: oy, r: 14 + i * 10, age: -i * 90, life: 720, color: sig.color });
+    }
+  } else if (sig.shape === 'cloud') {
+    for (let i = 0; i < 16; i++) {
+      s.fx.push({
+        kind: 'puff', x: ox, y: oy + (Math.random() - 0.5) * 34,
+        vx: 70 + Math.random() * 150, vy: -30 + Math.random() * 60,
+        r: 10 + Math.random() * 16, age: -i * 18, life: 1100, color: 'rgba(156,204,101,0.55)',
+      });
+    }
+  } else {
+    for (let i = 0; i < 14; i++) {
+      s.fx.push({
+        kind: 'puff', x: ox + Math.random() * 180, y: s.groundY - 10,
+        vx: 30 + Math.random() * 150, vy: -140 - Math.random() * 90,
+        r: 5 + Math.random() * 10, age: -i * 14, life: 820, color: 'rgba(210,180,140,0.65)',
+      });
+    }
+  }
+}
 
 function dressEnemy(
   enemy: Fighter,
@@ -204,11 +260,30 @@ const SCENES: MenuScene[] = [
       const inStart = inEnd - runWindow(s.farX - mark, D);
       const outStart = 0.72;
       const outEnd = outStart + runWindow(s.farX - shoved, D);
-      if (p < 0.6) {
+
+      // The payload leaves the body when the *animation* says it does, never
+      // at a fixed point in the scene. Each hero's signature has its own
+      // wind-up, and pinning the effect to a progress number put Windelmann's
+      // cloud on screen half a second after he had already straightened back
+      // up. Standing up is driven the same way, off the pose's own length.
+      const sig = SIGNATURE[s.player.characterId];
+      if (s.player.anim === sig.anim) {
+        if (s.player.animTimeMs >= sig.releaseMs) {
+          s.once('release', () => {
+            s.mem.releaseP = p;
+            fireSignature(s, sig);
+            s.enemy.setAnim('knockback', true);
+          });
+        }
+        if (s.player.animTimeMs >= sig.totalMs) s.player.setAnim('idle', true);
+      }
+
+      const shoveStart = s.mem.releaseP ?? outStart;
+      if (p < shoveStart) {
         runLeg(s.enemy, p, s.farX, mark, inStart, inEnd);
       } else if (p < outStart) {
         // Shoved backwards by the effect — a slide, not a walk.
-        s.enemy.body.pos.x = lerp(mark, shoved, easeOutShove((p - 0.6) / (outStart - 0.6)));
+        s.enemy.body.pos.x = lerp(mark, shoved, easeOutShove((p - shoveStart) / (outStart - shoveStart)));
       } else {
         runLeg(s.enemy, p, shoved, s.farX, outStart, outEnd);
       }
@@ -223,43 +298,7 @@ const SCENES: MenuScene[] = [
           s.player.setAnim(sig.anim, true);
         },
       },
-      {
-        at: 0.58,
-        run: (s) => {
-          const sig = SIGNATURE[s.player.characterId];
-          s.say(sig.word, s.playerX + 120, s.groundY - 150, sig.color);
-          const ox = s.playerX + 40;
-          const oy = s.groundY - 70;
-          if (sig.shape === 'bite') {
-            s.fx.push({
-              kind: 'bite', x: s.playerX + 46, y: s.groundY - 112,
-              vx: 260, stopX: s.enemy.body.pos.x - 24, age: 0, life: 1600,
-            });
-          } else if (sig.shape === 'ring') {
-            for (let i = 0; i < 3; i++) {
-              s.fx.push({ kind: 'ring', x: ox, y: oy, r: 14 + i * 10, age: -i * 90, life: 720, color: sig.color });
-            }
-          } else if (sig.shape === 'cloud') {
-            for (let i = 0; i < 16; i++) {
-              s.fx.push({
-                kind: 'puff', x: ox, y: oy + (Math.random() - 0.5) * 34,
-                vx: 70 + Math.random() * 150, vy: -30 + Math.random() * 60,
-                r: 10 + Math.random() * 16, age: -i * 18, life: 1100, color: 'rgba(156,204,101,0.55)',
-              });
-            }
-          } else {
-            for (let i = 0; i < 14; i++) {
-              s.fx.push({
-                kind: 'puff', x: ox + Math.random() * 180, y: s.groundY - 10,
-                vx: 30 + Math.random() * 150, vy: -140 - Math.random() * 90,
-                r: 5 + Math.random() * 10, age: -i * 14, life: 820, color: 'rgba(210,180,140,0.65)',
-              });
-            }
-          }
-        },
-      },
-      { at: 0.6, run: (s) => s.enemy.setAnim('knockback', true) },
-      { at: 0.68, run: (s) => { s.player.setAnim('idle', true); s.enemy.setAnim('dazed', true); } },
+      { at: 0.68, run: (s) => s.enemy.setAnim('dazed', true) },
       { at: 0.97, run: (s) => s.enemy.setAnim('idle', true) },
     ],
   },
@@ -346,7 +385,7 @@ const SCENES: MenuScene[] = [
   {
     id: 'archer',
     arena: 'ice',
-    durationMs: 9400,
+    durationMs: 8600,
     setup: (s) => {
       dressEnemy(s.enemy, { color: '#455a64', accessories: ['shield'], scale: 1.3 });
       s.player.weaponId = 'bow';
@@ -359,43 +398,34 @@ const SCENES: MenuScene[] = [
       // shield, is stopped on its mark by the arrow, and walks straight back
       // out. An earlier cut had it standing there for four seconds before
       // the shot, which looked like the scene had frozen.
-      const D = 9400;
+      const D = 8600;
       const postX = s.nearX + s.w * 0.2;
       const reeled = postX + s.w * 0.07;
-      // Ends well before the arrow is loosed at 0.44, which reads the
-      // challenger's position to work out where the shot stops.
-      const inEnd = 0.42;
+      // The walk-in has to be finished before the string is let go, since
+      // the arrow is aimed at wherever the challenger is standing.
+      const inEnd = 0.40;
       const inStart = inEnd - runWindow(s.farX - postX, D);
-      const outStart = 0.62;
+      const outStart = 0.60;
       const outEnd = outStart + runWindow(s.farX - reeled, D);
-      if (p < 0.47) {
-        runLeg(s.enemy, p, s.farX, postX, inStart, inEnd);
-      } else if (p < outStart) {
-        // Reeling from the arrow, not walking.
-        s.enemy.body.pos.x = lerp(postX, reeled, easeOutShove((p - 0.47) / (outStart - 0.47)));
-      } else {
-        runLeg(s.enemy, p, reeled, s.farX, outStart, outEnd);
-      }
-      if (p <= inEnd) s.enemy.facing = -1;
-    },
-    beats: [
-      { at: 0.28, run: (s) => s.player.setAnim('attack', true) },
-      { at: 0.42, run: (s) => s.enemy.setAnim('idle', true) },
-      {
-        at: 0.44,
-        run: (s) => {
-          // Timed so the arrow lands on the challenger rather than sailing
-          // through it: it dies at stopX, and the hit beat below is placed
-          // at the progress the flight actually takes.
+
+      // The arrow leaves when the string does. BOW_LOOSE_MS is the moment
+      // the bow's own draw animation snaps back (see drawWeaponInHand); the
+      // shot used to be pinned to a progress number a whole second later,
+      // so the bow had long since come down before anything flew.
+      if (s.player.anim === 'attack' && s.player.animTimeMs >= BOW_LOOSE_MS) {
+        s.once('loose', () => {
           s.fx.push({
             kind: 'shot', x: s.playerX + 50, y: s.groundY - 96,
             vx: 560, stopX: s.enemy.body.pos.x - 26, age: 0, life: 1400, color: '#f1c40f',
           });
-        },
-      },
-      {
-        at: 0.47,
-        run: (s) => {
+          s.mem.looseP = p;
+        });
+      }
+      // ...and it lands when the arrow actually gets there, rather than at
+      // another guessed offset: the shot removes itself at stopX.
+      if (s.mem.looseP !== undefined && !s.fx.some((f) => f.kind === 'shot')) {
+        s.once('impact', () => {
+          s.mem.impactP = p;
           s.enemy.setAnim('hit', true);
           s.say('ZACK!', s.enemy.body.pos.x - 30, s.groundY - 150, '#ffe082');
           for (let i = 0; i < 8; i++) {
@@ -405,10 +435,24 @@ const SCENES: MenuScene[] = [
               r: 8 + Math.random() * 11, age: 0, life: 640, color: 'rgba(255,255,255,0.65)',
             });
           }
-        },
-      },
-      { at: 0.5, run: (s) => s.player.setAnim('idle', true) },
-      { at: 0.55, run: (s) => s.enemy.setAnim('stagger', true) },
+        });
+      }
+      const reelStart = s.mem.impactP ?? outStart;
+      if (p < reelStart) {
+        runLeg(s.enemy, p, s.farX, postX, inStart, inEnd);
+      } else if (p < outStart) {
+        // Reeling from the arrow, not walking.
+        s.enemy.body.pos.x = lerp(postX, reeled, easeOutShove((p - reelStart) / (outStart - reelStart)));
+      } else {
+        runLeg(s.enemy, p, reeled, s.farX, outStart, outEnd);
+      }
+      if (p <= inEnd) s.enemy.facing = -1;
+    },
+    beats: [
+      { at: 0.40, run: (s) => s.enemy.setAnim('idle', true) },
+      { at: 0.42, run: (s) => s.player.setAnim('attack', true) },
+      { at: 0.49, run: (s) => s.player.setAnim('idle', true) },
+      { at: 0.56, run: (s) => s.enemy.setAnim('stagger', true) },
       { at: 0.95, run: (s) => s.enemy.setAnim('idle', true) },
     ],
   },
@@ -491,6 +535,16 @@ export function MenuArenaBackground({ characterId, capeColorId }: Props) {
     const say = (text: string, x: number, y: number, color = '#ffffff') => {
       fx.push({ kind: 'word', x, y, text, age: 0, life: 1000, color });
     };
+    // Scene-local scratch for the moments a scene has to time off an
+    // animation's own clock rather than off its progress. Both are cleared
+    // whenever a scene starts, alongside the effects.
+    let fired = new Set<string>();
+    let mem: Record<string, number> = {};
+    const once = (key: string, fn: () => void) => {
+      if (fired.has(key)) return;
+      fired.add(key);
+      fn();
+    };
 
     let raf = 0;
     let last = performance.now();
@@ -509,7 +563,7 @@ export function MenuArenaBackground({ characterId, capeColorId }: Props) {
       const nearX = w * 0.53;
       const farX = worldW + w * 0.2;
 
-      const runtime: SceneRuntime = { w, h, groundY, player, enemy, playerX, nearX, farX, fx, say };
+      const runtime: SceneRuntime = { w, h, groundY, player, enemy, playerX, nearX, farX, fx, say, once, mem };
 
       if (needsSetup) {
         player.body.pos.x = playerX;
@@ -613,6 +667,8 @@ export function MenuArenaBackground({ characterId, capeColorId }: Props) {
         sceneStart = now;
         nextBeat = 0;
         fx = [];
+        fired = new Set();
+        mem = {};
         runtime.fx = fx;
         needsSetup = true;
         cameraReady = false;

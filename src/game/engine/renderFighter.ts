@@ -719,9 +719,15 @@ function computeSpearThrust(t: number): Pose {
 // draw -> release, where the string hand snaps forward. drawWeaponInHand
 // mirrors these exact phase boundaries to actually animate the string
 // itself, so the two stay in lockstep.
+/** The instant the string snaps forward and the arrow is gone, in ms into
+ * the 'attack' animation. Exported so anything that has to launch a real
+ * projectile can fire on the same frame the bow visibly lets go, instead of
+ * guessing an offset. */
+export const BOW_LOOSE_MS = 320;
+
 function computeBowShot(t: number): Pose {
   const raiseEnd = 0.12;
-  const drawEnd = 0.32;
+  const drawEnd = BOW_LOOSE_MS / 1000;
   const releaseEnd = 0.4;
   const totalEnd = 0.6;
   const raisePose: Pose = { ...STAND, bodyLean: 0.04, armFrontX: 23, armFrontY: -1, armBackX: 6, armBackY: 12 };
@@ -1648,7 +1654,7 @@ export function drawWeaponInHand(ctx: CanvasRenderingContext2D, f: Fighter, hand
       if (f.anim === 'attack') {
         const at = f.animTimeMs / 1000;
         const raiseEnd = 0.12;
-        const drawEnd = 0.32;
+        const drawEnd = BOW_LOOSE_MS / 1000;
         const releaseEnd = 0.4;
         if (at < raiseEnd) pull = 0;
         else if (at < drawEnd) pull = (at - raiseEnd) / (drawEnd - raiseEnd);
