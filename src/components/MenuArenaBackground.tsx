@@ -554,14 +554,17 @@ export function MenuArenaBackground({ characterId, capeColorId }: Props) {
       }
 
       // --- camera ---------------------------------------------------------
-      // While the challenger is parked off-stage there is nothing out there
-      // to look at, so the camera settles on the hero instead of panning to
-      // the far edge of the world to follow an invisible marker.
-      const onStage = enemy.body.pos.x < worldW;
-      const focus = onStage
-        ? (player.body.pos.x + enemy.body.pos.x) / 2
-        : player.body.pos.x + w * 0.14;
-      const target = Math.max(0, Math.min(worldW - w, focus - w * 0.5));
+      // The hero is the anchor, and nothing else is. Framing on the midpoint
+      // between the two fighters instead made the camera's target jump the
+      // moment the challenger stepped on or off stage, and the ease that
+      // followed dragged the whole world sideways under a hero who was
+      // standing perfectly still. On screen that is a stickman gliding
+      // backwards at the head of every scene and forwards again at its tail,
+      // in an idle pose, without taking a step — measured at 284px of drift
+      // across a single nine-second scene. Anchored to the hero the camera
+      // moves only when he does, which in three of the four scenes means it
+      // does not move at all.
+      const target = Math.max(0, Math.min(worldW - w, player.body.pos.x - w * 0.28));
       if (!cameraReady) { cameraX = target; cameraReady = true; }
       cameraX += (target - cameraX) * Math.min(1, dt / 420);
 
