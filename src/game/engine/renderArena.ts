@@ -108,7 +108,14 @@ export function renderArena(
   // Trees along the ground. Scaled with the arena's real width so the
   // doubled arena is populated at the same density as one screenful used
   // to be, rather than four lonely trees spread across the whole thing.
-  const treeColor = arena.isDark ? '#14211a' : arena.palette === 'volcano' ? '#3a1f14' : '#2d4a25';
+  const treeColor = arena.isDark
+    ? '#14211a'
+    : arena.palette === 'volcano' ? '#3a1f14'
+    // A winter tree is not a summer tree on a blue background: deeper and
+    // colder, with snow sitting on top of it.
+    : arena.palette === 'ice' ? '#2b4a40'
+    : '#2d4a25';
+  const snowyTrees = arena.palette === 'ice';
   const treeCount = Math.max(4, Math.round((width / 630) * 4));
   for (let i = 0; i < treeCount; i++) {
     const h1 = hash01(i + 61000);
@@ -116,7 +123,7 @@ export function renderArena(
     // Kept out of the middle third of each screenful so trees never sit
     // directly behind the fighters.
     const tx = ((i + 0.15 + h1 * 0.7) / treeCount) * width;
-    drawTree(ctx, tx, groundY, 62 + h2 * 36, treeColor, arena.isDark);
+    drawTree(ctx, tx, groundY, 62 + h2 * 36, treeColor, arena.isDark, snowyTrees);
   }
 
   // Ground.
@@ -125,6 +132,36 @@ export function renderArena(
   groundGrad.addColorStop(1, arena.groundColor2);
   ctx.fillStyle = groundGrad;
   ctx.fillRect(0, groundY, width, height - groundY);
+
+  // A winter floor, not a meadow tinted blue: a crust of settled snow along
+  // the ground line with drifts banked up against it, so the fighters are
+  // standing ON snow rather than on pale ice-coloured turf.
+  if (arena.palette === 'ice') {
+    ctx.save();
+    ctx.fillStyle = arena.isDark ? 'rgba(214,238,250,0.55)' : 'rgba(252,254,255,0.95)';
+    ctx.beginPath();
+    ctx.moveTo(0, groundY + 26);
+    const crustSteps = Math.max(10, Math.round(width / 46));
+    for (let i = 0; i <= crustSteps; i++) {
+      const x = (width * i) / crustSteps;
+      ctx.lineTo(x, groundY - 2 - hash01(i * 37 + 9100) * 5);
+    }
+    ctx.lineTo(width, groundY + 26);
+    ctx.closePath();
+    ctx.fill();
+    // Banked drifts, sitting on the crust rather than floating over it.
+    const drifts = Math.max(3, Math.round((width / 630) * 5));
+    for (let i = 0; i < drifts; i++) {
+      const h1 = hash01(i + 9300);
+      const h2 = hash01(i + 9400);
+      const dx = ((i + 0.1 + h1 * 0.8) / drifts) * width;
+      const dw = 46 + h2 * 90;
+      ctx.beginPath();
+      ctx.ellipse(dx, groundY + 12, dw, 11 + h1 * 9, 0, Math.PI, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
 
   // Small decorative flowers, scattered irregularly across the meadow (a
   // fixed-multiplier formula reads as a visible grid once you look for it)
@@ -537,20 +574,46 @@ function drawCloud(ctx: CanvasRenderingContext2D, x: number, y: number, size: nu
   ctx.fill();
 }
 
-function drawTree(ctx: CanvasRenderingContext2D, x: number, groundY: number, height: number, color: string, dark: boolean): void {
+function drawTree(
+  ctx: CanvasRenderingContext2D, x: number, groundY: number, height: number,
+  color: string, dark: boolean, snowy = false,
+): void {
   ctx.save();
-  ctx.strokeStyle = dark ? '#0d0d0d' : '#4a2f1a';
+  ctx.strokeStyle = dark ? '#0d0d0d' : snowy ? '#3a2a1c' : '#4a2f1a';
   ctx.lineWidth = 8;
   ctx.beginPath();
   ctx.moveTo(x, groundY);
   ctx.lineTo(x, groundY - height * 0.5);
   ctx.stroke();
+  const crown = (r: number) => {
+    ctx.beginPath();
+    ctx.arc(x, groundY - height * 0.5, height * 0.4 * r, 0, Math.PI * 2);
+    ctx.arc(x - height * 0.22, groundY - height * 0.38, height * 0.28 * r, 0, Math.PI * 2);
+    ctx.arc(x + height * 0.22, groundY - height * 0.38, height * 0.28 * r, 0, Math.PI * 2);
+    ctx.fill();
+  };
   ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc(x, groundY - height * 0.5, height * 0.4, 0, Math.PI * 2);
-  ctx.arc(x - height * 0.22, groundY - height * 0.38, height * 0.28, 0, Math.PI * 2);
-  ctx.arc(x + height * 0.22, groundY - height * 0.38, height * 0.28, 0, Math.PI * 2);
-  ctx.fill();
+  crown(1);
+  if (snowy) {
+    // Snow lying on the crown. Clipped to the tree's own silhouette so it can
+    // never spill past the branches, and cut by the underside of a much
+    // larger circle rather than a straight edge — a horizontal cut makes the
+    // tree look painted half white, a curve makes it look like snow settled
+    // on top of it.
+    const cy = groundY - height * 0.5;
+    const r = height * 0.4;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x, cy, r, 0, Math.PI * 2);
+    ctx.arc(x - height * 0.22, groundY - height * 0.38, height * 0.28, 0, Math.PI * 2);
+    ctx.arc(x + height * 0.22, groundY - height * 0.38, height * 0.28, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(249,253,255,0.94)';
+    ctx.beginPath();
+    ctx.arc(x, cy - r * 2.6, r * 1.9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
   ctx.restore();
 }
 
@@ -834,20 +897,37 @@ function drawVolcanoEffects(ctx: CanvasRenderingContext2D, width: number, ground
   ctx.restore();
 }
 
+// Real snowfall rather than the twenty-six specks this used to be: the
+// density scales with the arena's width like every other effect, and it is
+// laid down in three depth layers — far flakes small, faint and slow, near
+// ones large, bright and quick — which is what makes falling snow read as
+// having depth instead of as dots on glass. Every flake also leans with the
+// same wind gust the grass and the capes do.
 function drawSnowfall(ctx: CanvasRenderingContext2D, width: number, height: number, timeSec: number): void {
   ctx.save();
-  ctx.fillStyle = 'rgba(255,255,255,0.85)';
-  const count = 26;
-  for (let i = 0; i < count; i++) {
-    const h1 = hash01(i + 1000);
-    const h2 = hash01(i + 2000);
-    const fallSpeed = 22 + h2 * 30;
-    const y = (timeSec * fallSpeed + h1 * height) % (height + 20) - 10;
-    const drift = Math.sin(timeSec * (0.6 + h2 * 0.8) + h1 * 10) * 14;
-    const x = (h1 * width + drift + width) % width;
-    ctx.beginPath();
-    ctx.arc(x, y, 1.4 + h2 * 1.6, 0, Math.PI * 2);
-    ctx.fill();
+  const gust = windGust(timeSec);
+  const layers = [
+    { n: 46, r: 1.0, speed: 16, alpha: 0.45, sway: 10 },
+    { n: 34, r: 1.9, speed: 30, alpha: 0.72, sway: 16 },
+    { n: 20, r: 3.0, speed: 52, alpha: 0.95, sway: 24 },
+  ];
+  let seed = 1000;
+  for (const L of layers) {
+    const count = Math.max(8, Math.round((width / 630) * L.n));
+    ctx.fillStyle = `rgba(255,255,255,${L.alpha})`;
+    for (let i = 0; i < count; i++) {
+      const h1 = hash01(seed + i * 3 + 1);
+      const h2 = hash01(seed + i * 3 + 2);
+      const fall = L.speed * (0.75 + h2 * 0.5);
+      const y = ((timeSec * fall + h1 * height) % (height + 24)) - 12;
+      const drift =
+        Math.sin(timeSec * (0.5 + h2 * 0.7) + h1 * 10) * L.sway + gust * L.sway * 2.2;
+      const x = ((h1 * width + drift) % width + width) % width;
+      ctx.beginPath();
+      ctx.arc(x, y, L.r * (0.7 + h2 * 0.6), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    seed += 5000;
   }
   ctx.restore();
 }
