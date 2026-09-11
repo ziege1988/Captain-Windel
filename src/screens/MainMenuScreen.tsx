@@ -33,7 +33,10 @@ export function MainMenuScreen() {
 
       {/* A soft top/bottom darkening so text and buttons stay readable over
           the animated scene without needing a heavy, distracting overlay. */}
-      <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to bottom, rgba(8,12,8,0.72) 0%, rgba(8,12,8,0.1) 22%, rgba(8,12,8,0.1) 60%, rgba(8,12,8,0.8) 100%)' }} />
+      {/* Dark under the title and again under the buttons, but clear
+          through the middle — that band is where the fighters now are, and
+          the whole point is to be able to see them. */}
+      <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to bottom, rgba(8,12,8,0.78) 0%, rgba(8,12,8,0.12) 17%, rgba(8,12,8,0.05) 40%, rgba(8,12,8,0.62) 55%, rgba(8,12,8,0.86) 100%)' }} />
 
       <div
         style={{

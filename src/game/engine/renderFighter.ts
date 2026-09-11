@@ -31,6 +31,10 @@ interface Pose {
   // deeper bend, while everything that doesn't care keeps the old default.
   bendFront: number;
   bendBack: number;
+  /** Whole-body rotation in radians, about a point roughly at the centre
+   * of mass. Only the dodge roll uses it — a rolling fighter is the one
+   * case where the rig turns as one object rather than posing its joints. */
+  spin: number;
 }
 
 const STAND: Pose = {
@@ -38,7 +42,7 @@ const STAND: Pose = {
   armFrontX: 6, armFrontY: 26, armBackX: -6, armBackY: 26,
   legFrontX: 8, legFrontY: 40, legBackX: -8, legBackY: 40,
   capeKick: 0, flatten: 0, turnFlip: 0, shoulderDrop: 0,
-  bendFront: 0.16, bendBack: 0.16,
+  bendFront: 0.16, bendBack: 0.16, spin: 0,
 };
 
 function lerp(a: number, b: number, t: number): number {
@@ -80,6 +84,10 @@ function smoothPose(f: Fighter, target: Pose, dtSec: number): Pose {
     out[key] = lerp(previous[key], target[key], amount);
   }
   const smoothed = out as unknown as Pose;
+  // Everything else eases; the roll's rotation does not. It finishes a
+  // whole turn from where it began, and easing -2PI back to 0 at the end
+  // would whip the fighter backwards through a second, wrong-way spin.
+  smoothed.spin = target.spin;
   displayPoseCache.set(f, smoothed);
   return smoothed;
 }
@@ -157,8 +165,40 @@ function computePose(f: Fighter): Pose {
       };
     case 'block':
       return { ...STAND, bodyLean: 0.05, armFrontX: 18, armFrontY: 4, armBackX: 14, armBackY: 8 };
-    case 'dodge':
-      return { ...STAND, bodyLean: -0.3, hipY: 8, armFrontX: -10, armBackX: -14, legFrontX: 4, legBackX: -14 };
+    case 'dodge': {
+      // A real backward roll. What was here before was a single static
+      // crouch that the movement code overwrote on the very next frame, so
+      // on screen it was a flicker and nothing else — no roll ever
+      // happened. This tucks the whole body into a ball and turns it once,
+      // all the way round, while it travels; GameEngine.dodge() now holds
+      // the animation for its own length so it can actually play.
+      const total = 0.52;
+      const k = Math.min(1, t / total);
+      // Tight through the middle, standing at both ends, so the roll opens
+      // out of a stance and lands back in one.
+      const tuck = Math.pow(Math.sin(Math.min(1, k / 0.88) * Math.PI), 0.55);
+      // Eased so the turn is quickest while the body is smallest, which is
+      // how a real roll reads.
+      const turn = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+      const crouch = 30 * tuck;
+      return {
+        ...STAND,
+        // Negative: away from the way the fighter is facing. The whole rig
+        // is already mirrored by facing, so this comes out as a backward
+        // roll whichever way they are turned.
+        spin: -Math.PI * 2 * turn,
+        bodyLean: 0.95 * tuck,
+        hipY: crouch,
+        shoulderDrop: crouch * 0.85,
+        headOffsetX: 7 * tuck, headOffsetY: 11 * tuck,
+        armFrontX: lerp(6, 12, tuck), armFrontY: lerp(26, 0, tuck),
+        armBackX: lerp(-6, 7, tuck), armBackY: lerp(26, -3, tuck),
+        legFrontX: lerp(8, 15, tuck), legFrontY: lerp(40, 9, tuck),
+        legBackX: lerp(-8, 11, tuck), legBackY: lerp(40, 13, tuck),
+        capeKick: 0.9 * tuck,
+        bendFront: 0.16 + 0.55 * tuck, bendBack: 0.16 + 0.55 * tuck,
+      };
+    }
     case 'hit':
       return { ...STAND, bodyLean: -0.25, armFrontX: -14, armFrontY: 18, armBackX: -18, armBackY: 14 };
     case 'knockback':
@@ -1076,6 +1116,16 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
   ctx.translate(x, groundY - airLift + groundEmbed);
   ctx.scale(f.facing * scale * turnMirror, scale);
 
+  // Rolling: turn the whole rig about its centre of mass rather than about
+  // the feet, or the body would sweep round the ground like a hand on a
+  // clock instead of rolling along it.
+  if (pose.spin !== 0) {
+    const pivotY = -f.height * 0.34;
+    ctx.translate(0, pivotY);
+    ctx.rotate(pose.spin);
+    ctx.translate(0, -pivotY);
+  }
+
   if (pose.flatten > 0.001) {
     // Death/knockdown ground-anchor fix, two parts.
     // (1) A translate applied *after* a rotate operates in the rotated
@@ -1094,7 +1144,12 @@ export function renderFighter(ctx: CanvasRenderingContext2D, f: Fighter, dtSec =
     ctx.translate(FLATTEN_GROUND_LIFT * pose.flatten, f.height * 0.45 * pose.flatten);
   }
 
-  const flashInvuln = f.invulnerableMs > 0 && Math.floor(f.animTimeMs / 60) % 2 === 0;
+  // The roll is the one place invulnerability is *earned* rather than granted,
+  // and it is also the only place where the fighter is doing something worth
+  // watching. Strobing it at 60ms made the whole move read as a flicker
+  // instead of a somersault, so the roll keeps its i-frames but stays solid.
+  const flashInvuln =
+    f.invulnerableMs > 0 && f.anim !== 'dodge' && Math.floor(f.animTimeMs / 60) % 2 === 0;
   ctx.globalAlpha = flashInvuln ? 0.5 : 1;
 
   // Character-system overhaul: the four playable heroes share this exact
@@ -1519,19 +1574,35 @@ export function drawWeaponInHand(ctx: CanvasRenderingContext2D, f: Fighter, hand
 
       // Geometry, all measured from the hand at (0, 0): the grip is the
       // belly of the bow, so the hand is ON the riser rather than floating
-      // in front of it (it used to sit on the string, 16px clear of the
-      // bow itself). Limbs sweep back towards the archer and the string
+      // in front of it. Limbs sweep back towards the archer and the string
       // runs between their tips, behind the grip — which is also what puts
       // the arrow, nocked on that string, pointing forwards past the hand.
-      const limbHalf = 20;   // tip-to-grip height, each way
-      const sagitta = 12;    // how far the belly stands proud of the tips
+      //
+      // Taller and far finer than it was. The old one was 40px of uniform
+      // 4-7px stroke, which read as a thick croissant rather than a bow:
+      // the whole character of a bow is a long, springy limb that tapers
+      // to almost nothing at the nock.
+      const limbHalf = 34;   // tip-to-grip height, each way
+      const sagitta = 16;    // how far the belly stands proud of the tips
       const bowRadius = (limbHalf * limbHalf + sagitta * sagitta) / (2 * sagitta);
       const centreX = 2 - bowRadius;
       const tipAngle = Math.atan2(limbHalf, 2 - sagitta - centreX);
-      const topX = centreX + Math.cos(-tipAngle) * bowRadius;
-      const topY = Math.sin(-tipAngle) * bowRadius;
-      const botX = topX;
-      const botY = -topY;
+      // Only the last fifth of each limb hooks forward again, the way a real
+      // recurve's tips do. It has to stay small: a bigger hook eats the
+      // sagitta, and the belly and the tips then sit at the same x — which
+      // is exactly what made the first attempt draw as a straight stick
+      // with a string laid along it instead of a bow.
+      const recurveAt = (u: number) => Math.pow(Math.max(0, (u - 0.78) / 0.22), 2) * 4.5;
+      const limbPoint = (u: number, sign: 1 | -1) => {
+        const a = sign * tipAngle * u;
+        return {
+          a,
+          x: centreX + Math.cos(a) * bowRadius + recurveAt(u),
+          y: Math.sin(a) * bowRadius,
+        };
+      };
+      const tipTop = limbPoint(1, -1);
+      const tipBot = limbPoint(1, 1);
 
       let pull = 0;
       if (f.anim === 'attack') {
@@ -1544,47 +1615,131 @@ export function drawWeaponInHand(ctx: CanvasRenderingContext2D, f: Fighter, hand
         else if (at < releaseEnd) pull = Math.max(0, 1 - (at - drawEnd) / (releaseEnd - drawEnd));
         else pull = 0;
       }
-      const stringMidX = topX - pull * 18;
+      const stringMidX = tipTop.x - pull * 20;
 
-      // Limbs, tapering from a thick riser to thin tips.
-      ctx.strokeStyle = weapon.color;
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.arc(centreX, 0, bowRadius, -tipAngle, tipAngle);
-      ctx.stroke();
-      ctx.strokeStyle = weapon.color;
-      ctx.lineWidth = 6;
-      ctx.beginPath();
-      ctx.arc(centreX, 0, bowRadius, -0.28, 0.28);
-      ctx.stroke();
-      // The grip the hand closes around, right at the belly.
-      ctx.strokeStyle = '#4a3520';
-      ctx.lineWidth = 7;
-      ctx.beginPath();
-      ctx.arc(centreX, 0, bowRadius, -0.14, 0.14);
-      ctx.stroke();
-
-      ctx.strokeStyle = weapon.trailColor ?? '#f1c40f';
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
-      ctx.moveTo(topX, topY);
-      ctx.lineTo(stringMidX, 0);
-      ctx.lineTo(botX, botY);
-      ctx.stroke();
-      if (pull > 0.05) {
-        ctx.strokeStyle = '#6d4c2f';
-        ctx.lineWidth = 2;
+      // Each limb as a filled sliver that tapers from the riser to a hair
+      // at the nock. Drawn as a shape rather than a stroke because a
+      // stroke cannot taper, and an even-width limb is exactly what made
+      // the old bow look like a toy.
+      const drawBowLimb = (sign: 1 | -1) => {
+        const steps = 18;
+        const outer: [number, number][] = [];
+        const inner: [number, number][] = [];
+        for (let i = 0; i <= steps; i++) {
+          const u = i / steps;
+          const p = limbPoint(u, sign);
+          const w = lerp(2.6, 0.55, u * u);
+          const nx = Math.cos(p.a);
+          const ny = Math.sin(p.a);
+          outer.push([p.x + nx * w, p.y + ny * w]);
+          inner.push([p.x - nx * w, p.y - ny * w]);
+        }
         ctx.beginPath();
-        ctx.moveTo(stringMidX, 0);
-        ctx.lineTo(stringMidX + 40, 0);
-        ctx.stroke();
-        ctx.fillStyle = '#9e9e9e';
-        ctx.beginPath();
-        ctx.moveTo(stringMidX + 40, 0);
-        ctx.lineTo(stringMidX + 33, -3);
-        ctx.lineTo(stringMidX + 33, 3);
+        ctx.moveTo(outer[0][0], outer[0][1]);
+        for (let i = 1; i < outer.length; i++) ctx.lineTo(outer[i][0], outer[i][1]);
+        for (let i = inner.length - 1; i >= 0; i--) ctx.lineTo(inner[i][0], inner[i][1]);
         ctx.closePath();
         ctx.fill();
+      };
+      // Lighter than the weapon's own brown: the limbs are 1-3px of wood
+      // drawn straight over a black silhouette, and at the weapon colour
+      // they simply vanished into the body, leaving only the string
+      // visible — a lone bright line that read as a bolt, not a bow.
+      ctx.fillStyle = '#9a6636';
+      drawBowLimb(1);
+      drawBowLimb(-1);
+      // A pale edge along the back of each limb — the highlight is what
+      // stops a dark thin shape reading as a scratch.
+      ctx.strokeStyle = 'rgba(255,238,205,0.55)';
+      ctx.lineWidth = 0.7;
+      for (const sign of [1, -1] as const) {
+        ctx.beginPath();
+        for (let i = 0; i <= 12; i++) {
+          const p = limbPoint(i / 12, sign);
+          const w = lerp(2.4, 0.5, (i / 12) ** 2);
+          const px = p.x + Math.cos(p.a) * w;
+          const py = p.y + Math.sin(p.a) * w;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+
+      // The riser: a short thicker section at the belly with a wrapped
+      // grip and a small arrow shelf, so there is somewhere for the hand
+      // to actually be.
+      ctx.strokeStyle = '#8a5a2e';
+      ctx.lineWidth = 5;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(centreX, 0, bowRadius, -0.2, 0.2);
+      ctx.stroke();
+      ctx.strokeStyle = '#4a3520';
+      ctx.lineWidth = 6.5;
+      ctx.beginPath();
+      ctx.arc(centreX, 0, bowRadius, -0.115, 0.115);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(20,14,8,0.55)';
+      ctx.lineWidth = 0.9;
+      for (let i = -2; i <= 2; i++) {
+        const a = i * 0.045;
+        ctx.beginPath();
+        ctx.moveTo(centreX + Math.cos(a) * (bowRadius - 3.4), Math.sin(a) * (bowRadius - 3.4));
+        ctx.lineTo(centreX + Math.cos(a) * (bowRadius + 3.4), Math.sin(a) * (bowRadius + 3.4));
+        ctx.stroke();
+      }
+      // Arrow shelf, just above the grip.
+      ctx.fillStyle = '#5d4426';
+      ctx.beginPath();
+      ctx.moveTo(2, -3.4);
+      ctx.lineTo(8.5, -4.6);
+      ctx.lineTo(8.5, -2.4);
+      ctx.lineTo(2, -1.4);
+      ctx.closePath();
+      ctx.fill();
+
+      // The string: one hair-thin pale line. Deliberately NOT the weapon's
+      // trailColor — that is the arrow's gold, and at this thickness a
+      // saturated string is the loudest thing on the whole bow.
+      ctx.strokeStyle = 'rgba(240,236,222,0.92)';
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(tipTop.x, tipTop.y);
+      ctx.lineTo(stringMidX, 0);
+      ctx.lineTo(tipBot.x, tipBot.y);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(40,30,18,0.8)';
+      ctx.lineWidth = 1.8;
+      for (const tip of [tipTop, tipBot]) {
+        ctx.beginPath();
+        ctx.moveTo(tip.x - 1.6, tip.y);
+        ctx.lineTo(tip.x + 1.6, tip.y);
+        ctx.stroke();
+      }
+
+      if (pull > 0.05) {
+        ctx.strokeStyle = '#6d4c2f';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(stringMidX, 0);
+        ctx.lineTo(stringMidX + 46, 0);
+        ctx.stroke();
+        ctx.fillStyle = '#cfd8dc';
+        ctx.beginPath();
+        ctx.moveTo(stringMidX + 46, 0);
+        ctx.lineTo(stringMidX + 38, -2.6);
+        ctx.lineTo(stringMidX + 38, 2.6);
+        ctx.closePath();
+        ctx.fill();
+        // Fletching at the nock end.
+        ctx.fillStyle = '#e0e0e0';
+        for (const sy of [-1, 1] as const) {
+          ctx.beginPath();
+          ctx.moveTo(stringMidX + 2, 0);
+          ctx.lineTo(stringMidX + 9, sy * 3.4);
+          ctx.lineTo(stringMidX + 11, 0);
+          ctx.closePath();
+          ctx.fill();
+        }
       }
       break;
     }

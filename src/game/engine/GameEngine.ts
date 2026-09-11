@@ -459,7 +459,7 @@ interface StompShock {
 // (the character stands frozen in the last frame of a move they finished
 // seconds ago), so every new one-shot animation belongs in this set.
 const SETTLE_TO_IDLE: ReadonlySet<AnimState> = new Set<AnimState>([
-  'fart', 'superpower', 'hit', 'stagger',
+  'fart', 'superpower', 'hit', 'stagger', 'dodge',
   // Signature abilities.
   'dentures', 'annoyed', 'rockPose', 'stomp',
 ]);
@@ -914,6 +914,13 @@ export class GameEngine {
     this.startAttack(this.player, true);
   }
 
+  /** Direction the current roll travels in — away from the enemy. */
+  private dodgeDirX: 1 | -1 = -1;
+  /** Length of the roll, matched to the 'dodge' pose in renderFighter. */
+  private static readonly DODGE_ROLL_MS = 520;
+  /** Peak roll speed; the curve eases it to zero, covering ~150px in total. */
+  private static readonly DODGE_ROLL_SPEED = 520;
+
   blockStart(): void {
     this.wantsBlock = true;
   }
@@ -922,12 +929,23 @@ export class GameEngine {
   }
 
   dodge(): void {
-    if (this.phase !== 'playing' || !this.player.canAct()) return;
+    if (this.phase !== 'playing' || this.overlayPaused) return;
+    if (!this.player.canAct()) return;
     this.player.setAnim('dodge', true);
-    this.player.invulnerableMs = 320;
-    this.player.dodgeActiveWindowMs = 320;
+    this.player.invulnerableMs = 380;
+    this.player.dodgeActiveWindowMs = 380;
+    // Held for the length of the roll. Without this the movement block in
+    // updatePlaying reclaimed the fighter on the very next frame and put
+    // it straight back into run/idle — the pose was set and unset so fast
+    // that all the player ever saw was a flicker.
+    this.player.hitstunRemainingMs = Math.max(this.player.hitstunRemainingMs, 520);
     const dir = this.enemy ? Math.sign(this.enemy.body.pos.x - this.player.body.pos.x) || 1 : -1;
-    this.player.body.vel.x += -dir * 260;
+    this.player.facing = (dir || 1) as 1 | -1;
+    // Away from whoever we are facing. A single impulse was not enough: ground
+    // friction is applied per frame (0.86), so an impulse is spent inside ten
+    // frames and the roll covered barely a step. The roll is therefore driven
+    // for its whole length in updatePlaying instead — see DODGE_ROLL_SPEED.
+    this.dodgeDirX = (-dir || -1) as 1 | -1;
     audio.play('dodge');
   }
 
@@ -2773,6 +2791,15 @@ export class GameEngine {
       }
     } else if (!player.body.grounded) {
       // allow air drift to continue during hitstun-free falls
+    } else if (player.anim === 'dodge') {
+      // A roll is the one locked-out state that is supposed to be moving. The
+      // branch below kills horizontal speed on anything that cannot act, which
+      // is right for being staggered and wrong for a dodge — it left the
+      // fighter rolling on the spot. Driving the speed here rather than
+      // leaning on a one-off impulse also makes the distance covered a
+      // constant instead of a side effect of the friction coefficient.
+      const k = Math.min(1, player.animTimeMs / GameEngine.DODGE_ROLL_MS);
+      player.body.vel.x = this.dodgeDirX * GameEngine.DODGE_ROLL_SPEED * Math.pow(1 - k, 0.8);
     } else {
       player.body.vel.x = 0;
     }

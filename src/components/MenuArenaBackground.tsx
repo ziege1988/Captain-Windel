@@ -56,7 +56,7 @@ export function MenuArenaBackground({ characterId, capeColorId }: Props) {
     player.color = def.bodyColor;
     player.capeColorId = capeColorId;
     player.accessories = characterId === 'windelmann' ? ['diaper', 'cape'] : ['cape'];
-    player.scale = 1.25;
+    player.scale = 1.4;
     player.facing = 1;
     player.setAnim('idle', true);
 
@@ -64,7 +64,7 @@ export function MenuArenaBackground({ characterId, capeColorId }: Props) {
     enemy.color = '#37474f';
     enemy.accessories = ['boxingGloves'];
     enemy.facing = -1;
-    enemy.scale = 1.15;
+    enemy.scale = 1.3;
     enemy.setAnim('idle', true);
 
     let raf = 0;
@@ -75,7 +75,13 @@ export function MenuArenaBackground({ characterId, capeColorId }: Props) {
       const dt = Math.min(40, now - last);
       last = now;
       resize();
-      const groundY = h * 0.78;
+      // The scene sits ABOVE the menu, not behind it. At the old 0.78 the
+      // fighters stood exactly where the button block starts, so all that
+      // was ever visible of them was a hat and a pair of eyes peering out
+      // between two buttons. The floor is now in the empty band under the
+      // title, which puts the whole fight in the clear and leaves the
+      // ground filling the space the buttons sit on.
+      const groundY = h * 0.47;
       const layout: ArenaLayout = { width: w, height: h, groundY, minX: w * 0.06, maxX: w * 0.94 };
 
       const t = (now - startedAt) % LOOP_MS;
