@@ -76,6 +76,37 @@ interface MenuScene {
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
+// A scripted move only reads as running if the ground speed is in the range
+// the gait is drawn for. The menu world is barely wider than the screen while
+// the scenes are ten seconds long, so it is very easy to write a move that
+// carries a fighter 70px over a second and a half — which is a glide, not a
+// run, however correctly the legs cycle. Every walk and run below therefore
+// states the ground it covers and lets this work out how long that should
+// take, at whatever width the phone happens to be, instead of hard-coding a
+// window that only holds on one screen.
+const SCRIPT_RUN_SPEED = 190; // px/s, a little under the game's base 210
+function runWindow(distance: number, durationMs: number): number {
+  return ((Math.abs(distance) / SCRIPT_RUN_SPEED) * 1000) / durationMs;
+}
+
+/** Positions a fighter along one scripted run and keeps its 'run' state in
+ * step with the motion. Anything else about its animation (the idle it
+ * settles into, the hit it takes) stays with the scene's beats. */
+/** A shove is fast at the moment of impact and then dies away. A constant-rate
+ * lerp over the same window creeps instead, which looks like the fighter is
+ * being dragged rather than hit. */
+const easeOutShove = (t: number) => 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3);
+
+function runLeg(
+  f: Fighter, p: number, from: number, to: number, start: number, end: number,
+): void {
+  if (p <= start) { f.body.pos.x = from; return; }
+  if (p >= end) { f.body.pos.x = to; return; }
+  f.body.pos.x = lerp(from, to, (p - start) / (end - start));
+  f.facing = to >= from ? 1 : -1;
+  f.setAnim('run');
+}
+
 /** Signature move of the selected hero, so the menu shows off *your*
  * character rather than always Windelmann's. Mirrors the mapping in
  * GameEngine.useCharacterAbility. */
@@ -110,16 +141,24 @@ const SCENES: MenuScene[] = [
       s.player.setAnim('idle', true);
     },
     frame: (s, p) => {
-      if (p < 0.2) s.enemy.body.pos.x = s.farX;
-      else if (p < 0.44) s.enemy.body.pos.x = lerp(s.farX, s.nearX, (p - 0.2) / 0.24);
-      else if (p < 0.52) s.enemy.body.pos.x = s.nearX;
-      else if (p < 0.62) s.enemy.body.pos.x = lerp(s.nearX, s.nearX + s.w * 0.1, (p - 0.52) / 0.1);
-      else if (p < 0.88) s.enemy.body.pos.x = lerp(s.nearX + s.w * 0.1, s.farX, (p - 0.62) / 0.26);
-      else s.enemy.body.pos.x = s.farX;
-      s.enemy.facing = p > 0.62 ? 1 : -1;
+      const D = 9000;
+      // The approach is timed to *end* on its beat, so it always finishes
+      // before the kick however wide the screen is; only its start moves.
+      const inEnd = 0.44;
+      const inStart = inEnd - runWindow(s.farX - s.nearX, D);
+      const outStart = 0.62;
+      const outEnd = outStart + runWindow(s.farX - (s.nearX + s.w * 0.1), D);
+      if (p < 0.52) {
+        runLeg(s.enemy, p, s.farX, s.nearX, inStart, inEnd);
+      } else if (p < outStart) {
+        // Knocked back, not running: a slide is the whole point here.
+        s.enemy.body.pos.x = lerp(s.nearX, s.nearX + s.w * 0.1, easeOutShove((p - 0.52) / (outStart - 0.52)));
+      } else {
+        runLeg(s.enemy, p, s.nearX + s.w * 0.1, s.farX, outStart, outEnd);
+      }
+      if (p <= inEnd) s.enemy.facing = -1;
     },
     beats: [
-      { at: 0.2, run: (s) => s.enemy.setAnim('run', true) },
       { at: 0.44, run: (s) => s.enemy.setAnim('idle', true) },
       {
         at: 0.47,
@@ -137,8 +176,7 @@ const SCENES: MenuScene[] = [
       },
       { at: 0.52, run: (s) => s.enemy.setAnim('knockback', true) },
       { at: 0.58, run: (s) => s.player.setAnim('idle', true) },
-      { at: 0.62, run: (s) => s.enemy.setAnim('run', true) },
-      { at: 0.88, run: (s) => s.enemy.setAnim('idle', true) },
+      { at: 0.95, run: (s) => s.enemy.setAnim('idle', true) },
     ],
   },
 
@@ -159,16 +197,24 @@ const SCENES: MenuScene[] = [
       // effects travel (a gas cone, a shockwave, a ground shake, a spat set
       // of dentures), and at punching distance there was nothing to watch
       // them cross.
-      if (p < 0.12) s.enemy.body.pos.x = s.farX;
-      else if (p < 0.34) s.enemy.body.pos.x = lerp(s.farX, s.nearX + s.w * 0.22, (p - 0.12) / 0.22);
-      else if (p < 0.6) s.enemy.body.pos.x = s.nearX + s.w * 0.22;
-      else if (p < 0.72) s.enemy.body.pos.x = lerp(s.nearX + s.w * 0.22, s.nearX + s.w * 0.34, (p - 0.6) / 0.12);
-      else if (p < 0.94) s.enemy.body.pos.x = lerp(s.nearX + s.w * 0.34, s.farX, (p - 0.72) / 0.22);
-      else s.enemy.body.pos.x = s.farX;
-      s.enemy.facing = p > 0.72 ? 1 : -1;
+      const D = 9600;
+      const mark = s.nearX + s.w * 0.22;
+      const shoved = s.nearX + s.w * 0.34;
+      const inEnd = 0.34;
+      const inStart = inEnd - runWindow(s.farX - mark, D);
+      const outStart = 0.72;
+      const outEnd = outStart + runWindow(s.farX - shoved, D);
+      if (p < 0.6) {
+        runLeg(s.enemy, p, s.farX, mark, inStart, inEnd);
+      } else if (p < outStart) {
+        // Shoved backwards by the effect — a slide, not a walk.
+        s.enemy.body.pos.x = lerp(mark, shoved, easeOutShove((p - 0.6) / (outStart - 0.6)));
+      } else {
+        runLeg(s.enemy, p, shoved, s.farX, outStart, outEnd);
+      }
+      if (p <= inEnd) s.enemy.facing = -1;
     },
     beats: [
-      { at: 0.12, run: (s) => s.enemy.setAnim('run', true) },
       { at: 0.34, run: (s) => s.enemy.setAnim('idle', true) },
       {
         at: 0.46,
@@ -214,8 +260,7 @@ const SCENES: MenuScene[] = [
       },
       { at: 0.6, run: (s) => s.enemy.setAnim('knockback', true) },
       { at: 0.68, run: (s) => { s.player.setAnim('idle', true); s.enemy.setAnim('dazed', true); } },
-      { at: 0.72, run: (s) => s.enemy.setAnim('run', true) },
-      { at: 0.94, run: (s) => s.enemy.setAnim('idle', true) },
+      { at: 0.97, run: (s) => s.enemy.setAnim('idle', true) },
     ],
   },
 
@@ -233,27 +278,40 @@ const SCENES: MenuScene[] = [
       s.player.setAnim('idle', true);
     },
     frame: (s, p) => {
-      // Hero: stands, rolls back, then closes the distance again. The roll
-      // window is pinned to the 'dodge' pose's own 520ms — stretch it and
-      // the fighter keeps sliding backwards after the somersault has
-      // finished, which reads as moonwalking rather than a roll.
-      const rollEnd = 0.4 + 520 / 10200;
+      const D = 10200;
+      // Hero: stands, rolls back, holds, then lunges back in. The roll window
+      // is pinned to the 'dodge' pose's own 520ms — stretch it and the fighter
+      // keeps sliding backwards after the somersault has finished, which reads
+      // as moonwalking rather than a roll. The lunge is the move that made the
+      // hero appear to glide: it used to take a second and a half to cross
+      // seventy pixels, so the legs barely completed a single step while the
+      // body drifted from left to right. It is now a short dash timed to land
+      // exactly on the counter.
+      const rollEnd = 0.4 + 520 / D;
+      const backX = s.playerX - s.w * 0.13;
+      const counterX = s.playerX + s.w * 0.05;
+      const lungeEnd = 0.68;
+      const lungeStart = lungeEnd - runWindow(counterX - backX, D);
       if (p < 0.4) s.player.body.pos.x = s.playerX;
-      else if (p < rollEnd) s.player.body.pos.x = lerp(s.playerX, s.playerX - s.w * 0.13, (p - 0.4) / (rollEnd - 0.4));
-      else if (p < 0.52) s.player.body.pos.x = s.playerX - s.w * 0.13;
-      else if (p < 0.68) s.player.body.pos.x = lerp(s.playerX - s.w * 0.13, s.playerX + s.w * 0.05, (p - 0.52) / 0.16);
-      else s.player.body.pos.x = s.playerX + s.w * 0.05;
+      else if (p < rollEnd) s.player.body.pos.x = lerp(s.playerX, backX, (p - 0.4) / (rollEnd - 0.4));
+      else runLeg(s.player, p, backX, counterX, lungeStart, lungeEnd);
 
-      if (p < 0.1) s.enemy.body.pos.x = s.farX;
-      else if (p < 0.36) s.enemy.body.pos.x = lerp(s.farX, s.nearX - s.w * 0.03, (p - 0.1) / 0.26);
-      else if (p < 0.7) s.enemy.body.pos.x = s.nearX - s.w * 0.03;
-      else if (p < 0.78) s.enemy.body.pos.x = lerp(s.nearX - s.w * 0.03, s.nearX + s.w * 0.08, (p - 0.7) / 0.08);
-      else if (p < 0.95) s.enemy.body.pos.x = lerp(s.nearX + s.w * 0.08, s.farX, (p - 0.78) / 0.17);
-      else s.enemy.body.pos.x = s.farX;
-      s.enemy.facing = p > 0.78 ? 1 : -1;
+      const mark = s.nearX - s.w * 0.03;
+      const shoved = s.nearX + s.w * 0.08;
+      const inEnd = 0.36;
+      const inStart = inEnd - runWindow(s.farX - mark, D);
+      const outStart = 0.78;
+      const outEnd = outStart + runWindow(s.farX - shoved, D);
+      if (p < 0.7) {
+        runLeg(s.enemy, p, s.farX, mark, inStart, inEnd);
+      } else if (p < outStart) {
+        s.enemy.body.pos.x = lerp(mark, shoved, easeOutShove((p - 0.7) / (outStart - 0.7)));
+      } else {
+        runLeg(s.enemy, p, shoved, s.farX, outStart, outEnd);
+      }
+      if (p <= inEnd) s.enemy.facing = -1;
     },
     beats: [
-      { at: 0.1, run: (s) => s.enemy.setAnim('run', true) },
       { at: 0.36, run: (s) => s.enemy.setAnim('idle', true) },
       { at: 0.4, run: (s) => { s.enemy.setAnim('attack', true); s.player.setAnim('dodge', true); } },
       {
@@ -270,7 +328,6 @@ const SCENES: MenuScene[] = [
         },
       },
       { at: 0.451, run: (s) => s.player.setAnim('idle', true) },
-      { at: 0.52, run: (s) => s.player.setAnim('run', true) },
       {
         at: 0.68,
         run: (s) => {
@@ -280,8 +337,7 @@ const SCENES: MenuScene[] = [
       },
       { at: 0.7, run: (s) => s.enemy.setAnim('knockback', true) },
       { at: 0.76, run: (s) => s.player.setAnim('idle', true) },
-      { at: 0.78, run: (s) => s.enemy.setAnim('run', true) },
-      { at: 0.95, run: (s) => s.enemy.setAnim('idle', true) },
+      { at: 0.97, run: (s) => s.enemy.setAnim('idle', true) },
     ],
   },
 
@@ -299,21 +355,32 @@ const SCENES: MenuScene[] = [
       s.player.setAnim('idle', true);
     },
     frame: (s, p) => {
-      // The challenger never stops moving here: it walks in behind its
-      // shield, is stopped by the arrow, and walks straight back out. An
-      // earlier version had it standing on its mark for four seconds before
+      // The challenger is barely ever still here: it jogs in behind its
+      // shield, is stopped on its mark by the arrow, and walks straight back
+      // out. An earlier cut had it standing there for four seconds before
       // the shot, which looked like the scene had frozen.
+      const D = 9400;
       const postX = s.nearX + s.w * 0.2;
-      if (p < 0.08) s.enemy.body.pos.x = s.farX;
-      else if (p < 0.47) s.enemy.body.pos.x = lerp(s.farX, postX, (p - 0.08) / 0.39);
-      else if (p < 0.62) s.enemy.body.pos.x = lerp(postX, postX + s.w * 0.07, (p - 0.47) / 0.15);
-      else if (p < 0.88) s.enemy.body.pos.x = lerp(postX + s.w * 0.07, s.farX, (p - 0.62) / 0.26);
-      else s.enemy.body.pos.x = s.farX;
-      s.enemy.facing = p > 0.62 ? 1 : -1;
+      const reeled = postX + s.w * 0.07;
+      // Ends well before the arrow is loosed at 0.44, which reads the
+      // challenger's position to work out where the shot stops.
+      const inEnd = 0.42;
+      const inStart = inEnd - runWindow(s.farX - postX, D);
+      const outStart = 0.62;
+      const outEnd = outStart + runWindow(s.farX - reeled, D);
+      if (p < 0.47) {
+        runLeg(s.enemy, p, s.farX, postX, inStart, inEnd);
+      } else if (p < outStart) {
+        // Reeling from the arrow, not walking.
+        s.enemy.body.pos.x = lerp(postX, reeled, easeOutShove((p - 0.47) / (outStart - 0.47)));
+      } else {
+        runLeg(s.enemy, p, reeled, s.farX, outStart, outEnd);
+      }
+      if (p <= inEnd) s.enemy.facing = -1;
     },
     beats: [
-      { at: 0.08, run: (s) => s.enemy.setAnim('run', true) },
       { at: 0.28, run: (s) => s.player.setAnim('attack', true) },
+      { at: 0.42, run: (s) => s.enemy.setAnim('idle', true) },
       {
         at: 0.44,
         run: (s) => {
@@ -326,7 +393,6 @@ const SCENES: MenuScene[] = [
           });
         },
       },
-      { at: 0.5, run: (s) => s.player.setAnim('idle', true) },
       {
         at: 0.47,
         run: (s) => {
@@ -341,12 +407,20 @@ const SCENES: MenuScene[] = [
           }
         },
       },
+      { at: 0.5, run: (s) => s.player.setAnim('idle', true) },
       { at: 0.55, run: (s) => s.enemy.setAnim('stagger', true) },
-      { at: 0.62, run: (s) => s.enemy.setAnim('run', true) },
-      { at: 0.88, run: (s) => s.enemy.setAnim('idle', true) },
+      { at: 0.95, run: (s) => s.enemy.setAnim('idle', true) },
     ],
   },
 ];
+
+// Beats fire by walking the list in order as the scene's progress crosses each
+// timestamp, so one entry written out of sequence holds up every entry behind
+// it. That is not a hypothetical: the archer's ZACK! sat behind a later beat
+// and fired three hundred milliseconds after the arrow landed, which left the
+// challenger sliding backwards in its standing pose. Sorting here means the
+// order a scene is *written* in never has to be the order it plays in.
+for (const scene of SCENES) scene.beats.sort((a, b) => a.at - b.at);
 
 /** Fisher-Yates, then a rotation so the first scene of a visit is not always
  * the same one either. */
